@@ -27,11 +27,13 @@
             else pkgs.llvmPackages_18.libcxxStdenv;
 
           deps = with pkgs; [
+            libxkbcommon
             vulkan-extension-layer
             vulkan-memory-allocator
             vulkan-utility-libraries
             vulkan-loader
             vulkan-tools
+            wayland
           ];
         in
           with pkgs; {
@@ -55,22 +57,8 @@
                 ]
                 ++ deps;
 
-              VULKAN_SDK = "${vulkan-headers}";
-              VK_LAYER_PATH = "${vulkan-validation-layers}/share/vulkan/explicit_layer.d";
-              VK_ICD_FILENAMES =
-                if stdenv.isDarwin
-                then "${darwin.moltenvk}/share/vulkan/icd.d/MoltenVK_icd.json"
-                else let
-                  vulkanDir =
-                    if stdenv.hostPlatform.isx86_64
-                    then "${mesa.drivers}/share/vulkan/icd.d"
-                    else "${nixos-asahi.packages.aarch64-linux.mesa-asahi-edge.drivers}/share/vulkan/icd.d";
-                  vulkanFiles = builtins.filter (file: builtins.match ".*\\.json$" file != null) (builtins.attrNames (builtins.readDir vulkanDir));
-                  vulkanPaths = lib.concatStringsSep ":" (map (file: "${vulkanDir}/${file}") vulkanFiles);
-                in
-                  if stdenv.hostPlatform.isx86_64
-                  then "${linuxPackages_latest.nvidia_x11_beta}/share/vulkan/icd.d/nvidia_icd.x86_64.json:${vulkanPaths}"
-                  else vulkanPaths;
+              LD_LIBRARY_PATH = "${lib.makeLibraryPath deps}";
+              SHADERC_LIB_DIR = "${pkgs.shaderc.lib}/lib";
 
               name = "Vulkan";
             };
