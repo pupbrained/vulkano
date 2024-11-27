@@ -574,6 +574,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.29.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc46dd3ec48fdd8e693a98d2b8bafae273a2d54c1de02a2a7e3d57d501f39677"
+
+[[package]]
 name = "half"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1913,16 +1919,6 @@ dependencies = [
 
 [[package]]
 name = "vulkano"
-version = "0.1.0"
-dependencies = [
- "image",
- "vulkano 0.34.0",
- "vulkano-shaders",
- "winit",
-]
-
-[[package]]
-name = "vulkano"
 version = "0.34.0"
 source = "git+https://github.com/vulkano-rs/vulkano?branch=master#dd66e67cb22e1c7dd69aaa4c87d405192a3db058"
 dependencies = [
@@ -1953,6 +1949,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulkano-app"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "image",
+ "vulkano",
+ "vulkano-shaders",
+ "winit",
+]
+
+[[package]]
 name = "vulkano-macros"
 version = "0.34.0"
 source = "git+https://github.com/vulkano-rs/vulkano?branch=master#dd66e67cb22e1c7dd69aaa4c87d405192a3db058"
@@ -1974,7 +1981,7 @@ dependencies = [
  "quote",
  "shaderc",
  "syn",
- "vulkano 0.34.0",
+ "vulkano",
 ]
 
 [[package]]

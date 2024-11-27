@@ -1,9 +1,10 @@
 [package]
-name = "vulkano"
+name = "vulkano-app"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+glam = "0.29.0"
 image = "0.25.5"
 vulkano = { git = "https://github.com/vulkano-rs/vulkano", branch = "master" }
 vulkano-shaders = { git = "https://github.com/vulkano-rs/vulkano", branch = "master" }

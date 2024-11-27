@@ -1,0 +1,5 @@
+group_imports = "StdExternalCrate"
+imports_granularity = "Crate"
+imports_layout = "HorizontalVertical"
+tab_spaces = 2
+struct_lit_width = 10
