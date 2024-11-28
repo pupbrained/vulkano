@@ -1,22 +1,18 @@
-use std::{error::Error, sync::Arc, time::Instant, time::Duration};
-
-use self::model::{Normal, Position, INDICES, NORMALS, POSITIONS};
+use std::{error::Error, sync::Arc, time::Duration, time::Instant};
 
 use egui_winit_vulkano::{Gui, GuiConfig};
 
-use glam::{
-  f32::{Mat3, Vec3},
-  Mat4,
-};
+use glam::{DMat3, DMat4, DVec3, Mat4};
 
 use vulkano::{
   buffer::{
     allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo},
-    Buffer, BufferCreateInfo, BufferUsage, Subbuffer,
+    Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer,
   },
   command_buffer::{
     allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-    RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo,
+    CopyBufferToImageInfo, PrimaryCommandBufferAbstract, RenderPassBeginInfo, SubpassBeginInfo,
+    SubpassContents, SubpassEndInfo,
   },
   descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet, WriteDescriptorSet},
   device::{
@@ -24,7 +20,11 @@ use vulkano::{
     DeviceOwned, Queue, QueueCreateInfo, QueueFlags,
   },
   format::Format,
-  image::{view::ImageView, Image, ImageCreateInfo, ImageType, ImageUsage},
+  image::{
+    sampler::{Sampler, SamplerCreateInfo},
+    view::ImageView,
+    Image, ImageCreateInfo, ImageType, ImageUsage,
+  },
   instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
   memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
   pipeline::{
@@ -50,8 +50,8 @@ use vulkano::{
 
 use winit::{
   application::ApplicationHandler,
-  dpi::{LogicalSize, PhysicalSize},
-  event::WindowEvent,
+  dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
+  event::{ElementState, MouseButton, WindowEvent},
   event_loop::{ActiveEventLoop, EventLoop},
   window::{Window, WindowId},
 };
@@ -65,7 +65,125 @@ use windows::{
   Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE},
 };
 
-mod model;
+use tobj;
+
+#[derive(BufferContents, Vertex)]
+#[repr(C)]
+struct Position {
+  #[format(R32G32B32_SFLOAT)]
+  position: [f32; 3],
+}
+
+#[derive(BufferContents, Vertex)]
+#[repr(C)]
+struct Normal {
+  #[format(R32G32B32_SFLOAT)]
+  normal: [f32; 3],
+}
+
+#[derive(BufferContents, Vertex)]
+#[repr(C)]
+struct TexCoord {
+  #[format(R32G32_SFLOAT)]
+  tex_coord: [f32; 2],
+}
+
+fn load_viking_room_model(
+  memory_allocator: &Arc<StandardMemoryAllocator>,
+) -> (
+  Subbuffer<[Position]>,
+  Subbuffer<[Normal]>,
+  Subbuffer<[TexCoord]>,
+  Subbuffer<[u32]>,
+) {
+  let (models, _materials) =
+    tobj::load_obj("models/viking_room.obj", &tobj::LoadOptions::default()).unwrap();
+  let mesh = &models[0].mesh;
+
+  let positions: Vec<Position> = mesh
+    .positions
+    .chunks(3)
+    .map(|chunk| Position {
+      position: [chunk[0], chunk[1], chunk[2]],
+    })
+    .collect();
+
+  let normals: Vec<Normal> = mesh
+    .normals
+    .chunks(3)
+    .map(|chunk| Normal {
+      normal: [chunk[0], chunk[1], chunk[2]],
+    })
+    .collect();
+
+  let tex_coords: Vec<TexCoord> = mesh
+    .texcoords
+    .chunks(2)
+    .map(|chunk| TexCoord {
+      tex_coord: [chunk[0], 1.0 - chunk[1]], // Flip Y coordinate
+    })
+    .collect();
+
+  let indices: Vec<u32> = mesh.indices.clone();
+
+  let vertex_buffer = Buffer::from_iter(
+    memory_allocator.clone(),
+    BufferCreateInfo {
+      usage: BufferUsage::VERTEX_BUFFER,
+      ..Default::default()
+    },
+    AllocationCreateInfo {
+      memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+      ..Default::default()
+    },
+    positions,
+  )
+  .unwrap();
+
+  let normal_buffer = Buffer::from_iter(
+    memory_allocator.clone(),
+    BufferCreateInfo {
+      usage: BufferUsage::VERTEX_BUFFER,
+      ..Default::default()
+    },
+    AllocationCreateInfo {
+      memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+      ..Default::default()
+    },
+    normals,
+  )
+  .unwrap();
+
+  let tex_coord_buffer = Buffer::from_iter(
+    memory_allocator.clone(),
+    BufferCreateInfo {
+      usage: BufferUsage::VERTEX_BUFFER,
+      ..Default::default()
+    },
+    AllocationCreateInfo {
+      memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+      ..Default::default()
+    },
+    tex_coords,
+  )
+  .unwrap();
+
+  let index_buffer = Buffer::from_iter(
+    memory_allocator.clone(),
+    BufferCreateInfo {
+      usage: BufferUsage::INDEX_BUFFER,
+      ..Default::default()
+    },
+    AllocationCreateInfo {
+      memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+      ..Default::default()
+    },
+    indices,
+  )
+  .unwrap();
+
+  (vertex_buffer, normal_buffer, tex_coord_buffer, index_buffer)
+}
 
 fn main() -> Result<(), impl Error> {
   // The start of this example is exactly the same as `triangle`. You should read the `triangle`
@@ -85,23 +203,28 @@ struct App {
   descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
   command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
   vertex_buffer: Subbuffer<[Position]>,
-  normals_buffer: Subbuffer<[Normal]>,
-  index_buffer: Subbuffer<[u16]>,
+  normal_buffer: Subbuffer<[Normal]>,
+  tex_coord_buffer: Subbuffer<[TexCoord]>,
+  index_buffer: Subbuffer<[u32]>,
   uniform_buffer_allocator: SubbufferAllocator,
+  texture: Arc<ImageView>,
+  sampler: Arc<Sampler>,
   rcx: Option<RenderContext>,
   gui: Option<Gui>,
   last_frame_time: Instant,
   fps: f32,
   // Camera state
-  camera_pos: Vec3,
-  camera_yaw: f32,
-  camera_pitch: f32,
+  camera_pos: DVec3,
+  camera_yaw: f64,
+  camera_pitch: f64,
+  camera_roll: f64,
+  camera_front: DVec3,
   // Smooth movement
-  camera_velocity: Vec3,
-  movement_acceleration: f32,
-  movement_deceleration: f32,
-  max_speed: f32,
-  movement_input: Vec3,
+  camera_velocity: DVec3,
+  movement_acceleration: f64,
+  movement_deceleration: f64,
+  max_speed: f64,
+  movement_input: DVec3,
   // Rendering settings
   wireframe_mode: bool,
   line_width: f32,
@@ -109,6 +232,8 @@ struct App {
   needs_pipeline_update: bool,
   last_line_width_update: Instant,
   line_width_update_interval: Duration,
+  last_cursor_position: PhysicalPosition<f64>,
+  cursor_captured: bool,
 }
 
 struct RenderContext {
@@ -122,7 +247,6 @@ struct RenderContext {
   recreate_swapchain: bool,
   previous_frame_end: Option<Box<dyn GpuFuture>>,
   swapchain_image_views: Vec<Arc<ImageView>>,
-  rotation_start: Instant,
 }
 
 impl App {
@@ -179,8 +303,8 @@ impl App {
       DeviceCreateInfo {
         enabled_extensions: device_extensions,
         enabled_features: DeviceFeatures {
-          fill_mode_non_solid: true, // Enable wireframe mode
-          wide_lines: true,          // Enable adjustable line width
+          fill_mode_non_solid: true,       // Enable wireframe mode
+          wide_lines: true,                // Enable adjustable line width
           image_view_format_swizzle: true, // Enable image view format swizzling
           ..DeviceFeatures::empty()
         },
@@ -218,48 +342,8 @@ impl App {
       Default::default(),
     ));
 
-    let vertex_buffer = Buffer::from_iter(
-      memory_allocator.clone(),
-      BufferCreateInfo {
-        usage: BufferUsage::VERTEX_BUFFER,
-        ..Default::default()
-      },
-      AllocationCreateInfo {
-        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-          | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-        ..Default::default()
-      },
-      POSITIONS,
-    )
-    .unwrap();
-    let normals_buffer = Buffer::from_iter(
-      memory_allocator.clone(),
-      BufferCreateInfo {
-        usage: BufferUsage::VERTEX_BUFFER,
-        ..Default::default()
-      },
-      AllocationCreateInfo {
-        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-          | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-        ..Default::default()
-      },
-      NORMALS,
-    )
-    .unwrap();
-    let index_buffer = Buffer::from_iter(
-      memory_allocator.clone(),
-      BufferCreateInfo {
-        usage: BufferUsage::INDEX_BUFFER,
-        ..Default::default()
-      },
-      AllocationCreateInfo {
-        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-          | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-        ..Default::default()
-      },
-      INDICES,
-    )
-    .unwrap();
+    let (vertex_buffer, normal_buffer, tex_coord_buffer, index_buffer) =
+      load_viking_room_model(&memory_allocator);
 
     let uniform_buffer_allocator = SubbufferAllocator::new(
       memory_allocator.clone(),
@@ -271,6 +355,76 @@ impl App {
       },
     );
 
+    // Load the texture
+    let texture_path = std::path::Path::new("textures/viking_room.png");
+    let texture_data = image::open(texture_path).unwrap().to_rgba8();
+    let dimensions = texture_data.dimensions();
+
+    let image = Image::new(
+      memory_allocator.clone(),
+      ImageCreateInfo {
+        image_type: ImageType::Dim2d,
+        format: Format::R8G8B8A8_SRGB,
+        extent: [dimensions.0, dimensions.1, 1],
+        usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
+        ..Default::default()
+      },
+      AllocationCreateInfo {
+        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+
+    let texture = ImageView::new_default(image.clone()).unwrap();
+
+    // Create staging buffer
+    let staging_buffer = Buffer::from_iter(
+      memory_allocator.clone(),
+      BufferCreateInfo {
+        usage: BufferUsage::TRANSFER_SRC,
+        ..Default::default()
+      },
+      AllocationCreateInfo {
+        memory_type_filter: MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+        ..Default::default()
+      },
+      texture_data.into_raw(),
+    )
+    .unwrap();
+
+    // Create command buffer for texture upload
+    let mut texture_upload = AutoCommandBufferBuilder::primary(
+      command_buffer_allocator.clone(),
+      queue.queue_family_index(),
+      CommandBufferUsage::OneTimeSubmit,
+    )
+    .unwrap();
+
+    texture_upload
+      .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(staging_buffer, image))
+      .unwrap();
+
+    let texture_upload = texture_upload.build().unwrap();
+    texture_upload
+      .execute(queue.clone())
+      .unwrap()
+      .then_signal_fence_and_flush()
+      .unwrap()
+      .wait(None)
+      .unwrap();
+
+    let sampler = Sampler::new(
+      device.clone(),
+      SamplerCreateInfo {
+        mag_filter: vulkano::image::sampler::Filter::Linear,
+        min_filter: vulkano::image::sampler::Filter::Linear,
+        address_mode: [vulkano::image::sampler::SamplerAddressMode::Repeat; 3],
+        ..Default::default()
+      },
+    )
+    .unwrap();
+
     App {
       instance,
       device,
@@ -279,23 +433,28 @@ impl App {
       descriptor_set_allocator,
       command_buffer_allocator,
       vertex_buffer,
-      normals_buffer,
+      normal_buffer,
+      tex_coord_buffer,
       index_buffer,
       uniform_buffer_allocator,
+      texture,
+      sampler,
       rcx: None,
       gui: None,
       last_frame_time: Instant::now(),
       fps: 0.0,
-      // Camera settings
-      camera_pos: Vec3::new(-1.1, 0.1, 1.0),
-      camera_yaw: -std::f32::consts::FRAC_PI_4,
+      // Camera state
+      camera_pos: DVec3::new(-1.1, 0.1, 1.0),
+      camera_yaw: -std::f64::consts::FRAC_PI_4,
       camera_pitch: 0.0,
-      // Smooth movement settings
-      camera_velocity: Vec3::ZERO,
+      camera_roll: 0.0,
+      camera_front: DVec3::new(0.0, 0.0, 1.0),
+      // Smooth movement
+      camera_velocity: DVec3::ZERO,
       movement_acceleration: 20.0,
       movement_deceleration: 10.0,
       max_speed: 2.0,
-      movement_input: Vec3::ZERO,
+      movement_input: DVec3::ZERO,
       // Rendering settings
       wireframe_mode: false,
       line_width: 1.0,
@@ -303,17 +462,19 @@ impl App {
       needs_pipeline_update: false,
       last_line_width_update: Instant::now(),
       line_width_update_interval: Duration::from_millis(100),
+      last_cursor_position: PhysicalPosition::new(0.0, 0.0),
+      cursor_captured: false,
     }
   }
 
-  fn update_camera_movement(&mut self, delta_time: f32) {
+  fn update_camera_movement(&mut self, delta_time: f64) {
     // Calculate movement direction based on input
-    let forward = Vec3::new(self.camera_yaw.cos(), 0.0, self.camera_yaw.sin()).normalize();
+    let forward = DVec3::new(self.camera_yaw.cos(), 0.0, self.camera_yaw.sin()).normalize();
 
-    let right = forward.cross(Vec3::new(0.0, -1.0, 0.0)).normalize();
+    let right = forward.cross(DVec3::new(0.0, -1.0, 0.0)).normalize();
 
     // Calculate target velocity based on input
-    let mut target_velocity = Vec3::ZERO;
+    let mut target_velocity = DVec3::ZERO;
     if self.movement_input.length() > 0.0 {
       // Combine horizontal movement
       target_velocity += forward * self.movement_input.z;
@@ -325,22 +486,23 @@ impl App {
       if target_velocity.length() > 1.0 {
         target_velocity = target_velocity.normalize();
       }
-      target_velocity *= self.max_speed;
+      target_velocity *= self.max_speed as f64;
     }
 
     // Accelerate or decelerate towards target velocity
     let acceleration = if target_velocity.length() > 0.0 {
-      self.movement_acceleration
+      self.movement_acceleration as f64
     } else {
-      self.movement_deceleration
+      self.movement_deceleration as f64
     };
 
     // Update velocity with acceleration
-    let velocity_delta = (target_velocity - self.camera_velocity) * acceleration * delta_time;
+    let velocity_delta =
+      (target_velocity - self.camera_velocity) * acceleration * delta_time as f64;
     self.camera_velocity += velocity_delta;
 
     // Update position
-    self.camera_pos += self.camera_velocity * delta_time;
+    self.camera_pos += self.camera_velocity * delta_time as f64;
   }
 }
 
@@ -488,8 +650,6 @@ impl ApplicationHandler for App {
 
     let previous_frame_end = Some(sync::now(self.device.clone()).boxed());
 
-    let rotation_start = Instant::now();
-
     self.gui = Some(Gui::new_with_subpass(
       event_loop,
       surface.clone(),
@@ -510,7 +670,6 @@ impl ApplicationHandler for App {
       recreate_swapchain: false,
       previous_frame_end,
       swapchain_image_views,
-      rotation_start,
     });
   }
 
@@ -577,9 +736,46 @@ impl ApplicationHandler for App {
           rcx.previous_frame_end.as_mut().unwrap().cleanup_finished();
         }
       }
+      WindowEvent::CursorMoved {
+        position, ..
+      } => {
+        if self.cursor_captured {
+          let sensitivity = 0.005; // Adjust sensitivity to a lower value
+          let delta_x = self.last_cursor_position.x - position.x; // Invert X-axis movement
+          let delta_y = position.y - self.last_cursor_position.y; // Correct Y-axis movement
+
+          self.camera_yaw += delta_x * sensitivity;
+          self.camera_pitch -= delta_y * sensitivity;
+
+          // Clamp the pitch to prevent flipping
+          self.camera_pitch = self
+            .camera_pitch
+            .clamp(-89.0f64.to_radians(), 89.0f64.to_radians());
+
+          // Update the camera's direction
+          let direction = DVec3::new(
+            self.camera_yaw.cos() * self.camera_pitch.cos(),
+            self.camera_pitch.sin(),
+            self.camera_yaw.sin() * self.camera_pitch.cos(),
+          );
+          self.camera_front = direction.normalize();
+        }
+
+        // Update last cursor position
+        self.last_cursor_position = position;
+      }
+      WindowEvent::MouseInput {
+        state,
+        button,
+        ..
+      } => {
+        if button == MouseButton::Left {
+          self.cursor_captured = state == ElementState::Pressed;
+        }
+      }
       WindowEvent::RedrawRequested => {
         let now = Instant::now();
-        let frame_time = now.duration_since(self.last_frame_time).as_secs_f32();
+        let frame_time = now.duration_since(self.last_frame_time).as_secs_f64();
         self.update_camera_movement(frame_time);
 
         let rcx = self.rcx.as_mut().unwrap();
@@ -621,9 +817,10 @@ impl ApplicationHandler for App {
         }
 
         let uniform_buffer = {
-          let elapsed = rcx.rotation_start.elapsed();
-          let rotation = elapsed.as_secs() as f64 + elapsed.subsec_nanos() as f64 / 1_000_000_000.0;
-          let rotation = Mat3::from_rotation_y(rotation as f32);
+          // Apply fixed rotations to orient the model correctly
+          let vertical_rotation = DMat3::from_rotation_x(-std::f64::consts::FRAC_PI_2);
+          let horizontal_rotation = DMat3::from_rotation_y(std::f64::consts::PI); // 180 degree rotation
+          let initial_rotation = horizontal_rotation * vertical_rotation;
 
           let aspect_ratio =
             rcx.swapchain.image_extent()[0] as f32 / rcx.swapchain.image_extent()[1] as f32;
@@ -631,16 +828,21 @@ impl ApplicationHandler for App {
           let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, aspect_ratio, 0.01, 100.0);
 
           // Update view matrix based on camera position
-          let view = Mat4::look_at_rh(
+          let view = DMat4::look_at_rh(
             self.camera_pos,
-            self.camera_pos + Vec3::new(self.camera_yaw.cos(), 0.0, self.camera_yaw.sin()),
-            Vec3::new(0.0, -1.0, 0.0), // Keep Y-axis inverted for Vulkan
+            self.camera_pos + self.camera_front,
+            DVec3::new(0.0, -1.0, 0.0),
           );
-          let scale = Mat4::from_scale(Vec3::splat(0.01));
+
+          let scale = DMat4::from_scale(DVec3::splat(1.0));
 
           let uniform_data = vs::Data {
-            world: Mat4::from_mat3(rotation).to_cols_array_2d(),
-            view: (view * scale).to_cols_array_2d(),
+            world: DMat4::from_mat3(initial_rotation)
+              .to_cols_array_2d()
+              .map(|row| row.map(|val| val as f32)),
+            view: (view * scale)
+              .to_cols_array_2d()
+              .map(|row| row.map(|val| val as f32)),
             proj: proj.to_cols_array_2d(),
           };
 
@@ -654,7 +856,10 @@ impl ApplicationHandler for App {
         let descriptor_set = DescriptorSet::new(
           self.descriptor_set_allocator.clone(),
           layout.clone(),
-          [WriteDescriptorSet::buffer(0, uniform_buffer)],
+          [
+            WriteDescriptorSet::buffer(0, uniform_buffer.clone()),
+            WriteDescriptorSet::image_view_sampler(1, self.texture.clone(), self.sampler.clone()),
+          ],
           [],
         )
         .unwrap();
@@ -696,6 +901,8 @@ impl ApplicationHandler for App {
                 ui.label(format!("Y: {:.2}", self.camera_pos.y));
                 ui.label(format!("Z: {:.2}", self.camera_pos.z));
                 ui.label(format!("Yaw: {:.1}°", self.camera_yaw.to_degrees()));
+                ui.label(format!("Pitch: {:.1}°", self.camera_pitch.to_degrees()));
+                ui.label(format!("Roll: {:.1}°", self.camera_roll.to_degrees()));
 
                 ui.separator();
 
@@ -762,7 +969,9 @@ impl ApplicationHandler for App {
                         .add(egui::Slider::new(&mut width, 1.0..=self.max_line_width).step_by(0.1))
                         .changed()
                       {
-                        if now.duration_since(self.last_line_width_update) > self.line_width_update_interval {
+                        if now.duration_since(self.last_line_width_update)
+                          > self.line_width_update_interval
+                        {
                           self.line_width = width;
                           self.needs_pipeline_update = true;
                           self.last_line_width_update = now;
@@ -786,10 +995,10 @@ impl ApplicationHandler for App {
 
                 // Reset buttons
                 if ui.button("Reset Camera Position").clicked() {
-                  self.camera_pos = Vec3::new(-1.1, 0.1, 1.0);
-                  self.camera_yaw = -std::f32::consts::FRAC_PI_4;
+                  self.camera_pos = DVec3::new(-1.1, 0.1, 1.0);
+                  self.camera_yaw = -std::f64::consts::FRAC_PI_4;
                   self.camera_pitch = 0.0;
-                  self.camera_velocity = Vec3::ZERO;
+                  self.camera_velocity = DVec3::ZERO;
                 }
                 if ui.button("Reset Movement Settings").clicked() {
                   self.max_speed = 2.0;
@@ -830,7 +1039,14 @@ impl ApplicationHandler for App {
             descriptor_set,
           )
           .unwrap()
-          .bind_vertex_buffers(0, (self.vertex_buffer.clone(), self.normals_buffer.clone()))
+          .bind_vertex_buffers(
+            0,
+            (
+              self.vertex_buffer.clone(),
+              self.normal_buffer.clone(),
+              self.tex_coord_buffer.clone(),
+            ),
+          )
           .unwrap()
           .bind_index_buffer(self.index_buffer.clone())
           .unwrap();
@@ -959,9 +1175,13 @@ fn window_size_dependent_setup(
   // driver to optimize things, at the cost of slower window resizes.
   // https://computergraphics.stackexchange.com/questions/5742/vulkan-best-way-of-updating-pipeline-viewport
   let pipeline = {
-    let vertex_input_state = [Position::per_vertex(), Normal::per_vertex()]
-      .definition(vs)
-      .unwrap();
+    let vertex_input_state = [
+      Position::per_vertex(),
+      Normal::per_vertex(),
+      TexCoord::per_vertex(),
+    ]
+    .definition(vs)
+    .unwrap();
 
     let stages = [
       PipelineShaderStageCreateInfo::new(vs.clone()),
