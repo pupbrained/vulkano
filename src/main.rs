@@ -86,14 +86,16 @@ struct TexCoord {
   tex_coord: [f32; 2],
 }
 
+struct VikingRoomModelBuffers {
+  positions: Subbuffer<[Position]>,
+  normals: Subbuffer<[Normal]>,
+  tex_coords: Subbuffer<[TexCoord]>,
+  indices: Subbuffer<[u32]>,
+}
+
 fn load_viking_room_model(
   memory_allocator: &Arc<StandardMemoryAllocator>,
-) -> (
-  Subbuffer<[Position]>,
-  Subbuffer<[Normal]>,
-  Subbuffer<[TexCoord]>,
-  Subbuffer<[u32]>,
-) {
+) -> VikingRoomModelBuffers {
   let (models, _materials) =
     tobj::load_obj("models/viking_room.obj", &tobj::LoadOptions::default()).unwrap();
   let mesh = &models[0].mesh;
@@ -180,7 +182,12 @@ fn load_viking_room_model(
   )
   .unwrap();
 
-  (vertex_buffer, normal_buffer, tex_coord_buffer, index_buffer)
+  VikingRoomModelBuffers {
+    positions: vertex_buffer,
+    normals: normal_buffer,
+    tex_coords: tex_coord_buffer,
+    indices: index_buffer,
+  }
 }
 
 fn main() -> Result<(), impl Error> {
@@ -200,10 +207,7 @@ struct App {
   memory_allocator: Arc<StandardMemoryAllocator>,
   descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
   command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-  vertex_buffer: Subbuffer<[Position]>,
-  normal_buffer: Subbuffer<[Normal]>,
-  tex_coord_buffer: Subbuffer<[TexCoord]>,
-  index_buffer: Subbuffer<[u32]>,
+  model_buffers: VikingRoomModelBuffers,
   uniform_buffer_allocator: SubbufferAllocator,
   texture: Arc<ImageView>,
   sampler: Arc<Sampler>,
@@ -343,8 +347,7 @@ impl App {
       Default::default(),
     ));
 
-    let (vertex_buffer, normal_buffer, tex_coord_buffer, index_buffer) =
-      load_viking_room_model(&memory_allocator);
+    let model_buffers = load_viking_room_model(&memory_allocator);
 
     let uniform_buffer_allocator = SubbufferAllocator::new(
       memory_allocator.clone(),
@@ -433,10 +436,7 @@ impl App {
       memory_allocator,
       descriptor_set_allocator,
       command_buffer_allocator,
-      vertex_buffer,
-      normal_buffer,
-      tex_coord_buffer,
-      index_buffer,
+      model_buffers,
       uniform_buffer_allocator,
       texture,
       sampler,
@@ -646,16 +646,16 @@ impl ApplicationHandler for App {
       .map(|image| ImageView::new_default(image.clone()).unwrap())
       .collect();
 
-    let (framebuffers, pipeline) = window_size_dependent_setup(
+    let (framebuffers, pipeline) = window_size_dependent_setup(WindowSizeSetupConfig {
       window_size,
-      &images,
-      &render_pass,
-      &self.memory_allocator,
-      &vs,
-      &fs,
-      self.wireframe_mode,
-      self.line_width,
-    );
+      images: &images,
+      render_pass: &render_pass,
+      memory_allocator: &self.memory_allocator,
+      vertex_shader: &vs,
+      fragment_shader: &fs,
+      wireframe_mode: self.wireframe_mode,
+      line_width: self.line_width,
+    });
 
     let previous_frame_end = Some(sync::now(self.device.clone()).boxed());
 
@@ -811,16 +811,16 @@ impl ApplicationHandler for App {
             .map(|image| ImageView::new_default(image.clone()).unwrap())
             .collect();
           rcx.swapchain_image_views = swapchain_image_views;
-          (rcx.framebuffers, rcx.pipeline) = window_size_dependent_setup(
+          (rcx.framebuffers, rcx.pipeline) = window_size_dependent_setup(WindowSizeSetupConfig {
             window_size,
-            &new_images,
-            &rcx.render_pass,
-            &self.memory_allocator,
-            &rcx.vs,
-            &rcx.fs,
-            self.wireframe_mode,
-            self.line_width,
-          );
+            images: &new_images,
+            render_pass: &rcx.render_pass,
+            memory_allocator: &self.memory_allocator,
+            vertex_shader: &rcx.vs,
+            fragment_shader: &rcx.fs,
+            wireframe_mode: self.wireframe_mode,
+            line_width: self.line_width,
+          });
           rcx.recreate_swapchain = false;
           self.needs_pipeline_update = false;
         }
@@ -1053,16 +1053,17 @@ impl ApplicationHandler for App {
           .bind_vertex_buffers(
             0,
             (
-              self.vertex_buffer.clone(),
-              self.normal_buffer.clone(),
-              self.tex_coord_buffer.clone(),
+              self.model_buffers.positions.clone(),
+              self.model_buffers.normals.clone(),
+              self.model_buffers.tex_coords.clone(),
             ),
           )
           .unwrap()
-          .bind_index_buffer(self.index_buffer.clone())
+          .bind_index_buffer(self.model_buffers.indices.clone())
           .unwrap();
 
-        unsafe { builder.draw_indexed(self.index_buffer.len() as u32, 1, 0, 0, 0) }.unwrap();
+        unsafe { builder.draw_indexed(self.model_buffers.indices.len() as u32, 1, 0, 0, 0) }
+          .unwrap();
 
         // Move to the egui subpass
         builder
@@ -1129,27 +1130,33 @@ impl ApplicationHandler for App {
   }
 }
 
-/// This function is called once during initialization, then again whenever the window is resized.
-fn window_size_dependent_setup(
+/// Configuration for window size dependent setup
+#[derive(Clone)]
+struct WindowSizeSetupConfig<'a> {
   window_size: PhysicalSize<u32>,
-  images: &[Arc<Image>],
-  render_pass: &Arc<RenderPass>,
-  memory_allocator: &Arc<StandardMemoryAllocator>,
-  vs: &EntryPoint,
-  fs: &EntryPoint,
+  images: &'a [Arc<Image>],
+  render_pass: &'a Arc<RenderPass>,
+  memory_allocator: &'a Arc<StandardMemoryAllocator>,
+  vertex_shader: &'a EntryPoint,
+  fragment_shader: &'a EntryPoint,
   wireframe_mode: bool,
   line_width: f32,
+}
+
+/// This function is called once during initialization, then again whenever the window is resized.
+fn window_size_dependent_setup(
+  config: WindowSizeSetupConfig,
 ) -> (Vec<Arc<Framebuffer>>, Arc<GraphicsPipeline>) {
-  let device = memory_allocator.device();
+  let device = config.memory_allocator.device();
 
   // Create multisampled depth buffer
   let depth_buffer = ImageView::new_default(
     Image::new(
-      memory_allocator.clone(),
+      config.memory_allocator.clone(),
       ImageCreateInfo {
         image_type: ImageType::Dim2d,
         format: Format::D16_UNORM,
-        extent: images[0].extent(),
+        extent: config.images[0].extent(),
         usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
         samples: vulkano::image::SampleCount::Sample4,
         ..Default::default()
@@ -1160,13 +1167,14 @@ fn window_size_dependent_setup(
   )
   .unwrap();
 
-  let framebuffers = images
+  let framebuffers = config
+    .images
     .iter()
     .map(|image| {
       let view = ImageView::new_default(image.clone()).unwrap();
       let msaa_color = ImageView::new_default(
         Image::new(
-          memory_allocator.clone(),
+          config.memory_allocator.clone(),
           ImageCreateInfo {
             image_type: ImageType::Dim2d,
             format: image.format(),
@@ -1182,7 +1190,7 @@ fn window_size_dependent_setup(
       .unwrap();
 
       Framebuffer::new(
-        render_pass.clone(),
+        config.render_pass.clone(),
         FramebufferCreateInfo {
           attachments: vec![msaa_color, view, depth_buffer.clone()],
           ..Default::default()
@@ -1194,7 +1202,7 @@ fn window_size_dependent_setup(
 
   // Always use line width 1.0 if wide lines are not supported
   let actual_line_width = if device.physical_device().supported_features().wide_lines {
-    line_width
+    config.line_width
   } else {
     1.0
   };
@@ -1205,12 +1213,12 @@ fn window_size_dependent_setup(
       Normal::per_vertex(),
       TexCoord::per_vertex(),
     ]
-    .definition(vs)
+    .definition(config.vertex_shader)
     .unwrap();
 
     let stages = [
-      PipelineShaderStageCreateInfo::new(vs.clone()),
-      PipelineShaderStageCreateInfo::new(fs.clone()),
+      PipelineShaderStageCreateInfo::new(config.vertex_shader.clone()),
+      PipelineShaderStageCreateInfo::new(config.fragment_shader.clone()),
     ];
 
     let layout = PipelineLayout::new(
@@ -1221,7 +1229,7 @@ fn window_size_dependent_setup(
     )
     .unwrap();
 
-    let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
+    let subpass = Subpass::from(config.render_pass.clone(), 0).unwrap();
 
     GraphicsPipeline::new(
       device.clone(),
@@ -1233,7 +1241,7 @@ fn window_size_dependent_setup(
         viewport_state: Some(ViewportState {
           viewports: [Viewport {
             offset: [0.0, 0.0],
-            extent: window_size.into(),
+            extent: config.window_size.into(),
             depth_range: 0.0..=1.0,
           }]
           .into_iter()
@@ -1242,7 +1250,7 @@ fn window_size_dependent_setup(
         }),
         rasterization_state: Some(RasterizationState {
           cull_mode: vulkano::pipeline::graphics::rasterization::CullMode::None,
-          polygon_mode: if wireframe_mode {
+          polygon_mode: if config.wireframe_mode {
             PolygonMode::Line
           } else {
             PolygonMode::Fill
