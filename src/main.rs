@@ -582,7 +582,9 @@ impl ApplicationHandler for App {
           min_image_count: surface_capabilities.min_image_count.max(2),
           image_format,
           image_extent: window_size.into(),
-          image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+          image_usage: ImageUsage::COLOR_ATTACHMENT
+            | ImageUsage::TRANSFER_DST
+            | ImageUsage::TRANSFER_SRC,
           composite_alpha: vulkano::swapchain::CompositeAlpha::Opaque,
           pre_transform: surface_capabilities.current_transform,
           clipped: true,
@@ -595,22 +597,29 @@ impl ApplicationHandler for App {
     let render_pass = vulkano::ordered_passes_renderpass!(
         self.device.clone(),
         attachments: {
+            msaa_color: {
+                format: swapchain.image_format(),
+                samples: 4,
+                load_op: Clear,
+                store_op: DontCare,
+            },
             final_color: {
                 format: swapchain.image_format(),
                 samples: 1,
-                load_op: Clear,
+                load_op: DontCare,
                 store_op: Store,
             },
             depth: {
                 format: Format::D16_UNORM,
-                samples: 1,
+                samples: 4,
                 load_op: Clear,
                 store_op: DontCare,
             }
         },
         passes: [
             {
-                color: [final_color],
+                color: [msaa_color],
+                color_resolve: [final_color],
                 depth_stencil: {depth},
                 input: []
             },
@@ -1019,7 +1028,11 @@ impl ApplicationHandler for App {
         builder
           .begin_render_pass(
             RenderPassBeginInfo {
-              clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(1.0.into())],
+              clear_values: vec![
+                Some([0.0, 0.0, 0.0, 1.0].into()), // msaa_color clear value
+                None,                              // final_color (DontCare)
+                Some(1.0.into()),                  // depth clear value
+              ],
               ..RenderPassBeginInfo::framebuffer(rcx.framebuffers[image_index as usize].clone())
             },
             SubpassBeginInfo {
@@ -1131,13 +1144,7 @@ fn window_size_dependent_setup(
 ) -> (Vec<Arc<Framebuffer>>, Arc<GraphicsPipeline>) {
   let device = memory_allocator.device();
 
-  // Always use line width 1.0 if wide lines are not supported
-  let actual_line_width = if device.physical_device().supported_features().wide_lines {
-    line_width
-  } else {
-    1.0
-  };
-
+  // Create multisampled depth buffer
   let depth_buffer = ImageView::new_default(
     Image::new(
       memory_allocator.clone(),
@@ -1146,6 +1153,7 @@ fn window_size_dependent_setup(
         format: Format::D16_UNORM,
         extent: images[0].extent(),
         usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+        samples: vulkano::image::SampleCount::Sample4,
         ..Default::default()
       },
       AllocationCreateInfo::default(),
@@ -1158,11 +1166,27 @@ fn window_size_dependent_setup(
     .iter()
     .map(|image| {
       let view = ImageView::new_default(image.clone()).unwrap();
+      let msaa_color = ImageView::new_default(
+        Image::new(
+          memory_allocator.clone(),
+          ImageCreateInfo {
+            image_type: ImageType::Dim2d,
+            format: image.format(),
+            extent: image.extent(),
+            usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+            samples: vulkano::image::SampleCount::Sample4,
+            ..Default::default()
+          },
+          AllocationCreateInfo::default(),
+        )
+        .unwrap(),
+      )
+      .unwrap();
 
       Framebuffer::new(
         render_pass.clone(),
         FramebufferCreateInfo {
-          attachments: vec![view, depth_buffer.clone()],
+          attachments: vec![msaa_color, view, depth_buffer.clone()],
           ..Default::default()
         },
       )
@@ -1170,10 +1194,13 @@ fn window_size_dependent_setup(
     })
     .collect::<Vec<_>>();
 
-  // In the triangle example we use a dynamic viewport, as its a simple example. However in the
-  // teapot example, we recreate the pipelines with a hardcoded viewport instead. This allows the
-  // driver to optimize things, at the cost of slower window resizes.
-  // https://computergraphics.stackexchange.com/questions/5742/vulkan-best-way-of-updating-pipeline-viewport
+  // Always use line width 1.0 if wide lines are not supported
+  let actual_line_width = if device.physical_device().supported_features().wide_lines {
+    line_width
+  } else {
+    1.0
+  };
+
   let pipeline = {
     let vertex_input_state = [
       Position::per_vertex(),
@@ -1229,7 +1256,10 @@ fn window_size_dependent_setup(
           depth: Some(DepthState::simple()),
           ..Default::default()
         }),
-        multisample_state: Some(MultisampleState::default()),
+        multisample_state: Some(MultisampleState {
+          rasterization_samples: vulkano::image::SampleCount::Sample4,
+          ..Default::default()
+        }),
         color_blend_state: Some(ColorBlendState::with_attachment_states(
           subpass.num_color_attachments(),
           ColorBlendAttachmentState {
