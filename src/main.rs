@@ -2,6 +2,8 @@ use std::{error::Error, sync::Arc, time::Instant};
 
 use self::model::{Normal, Position, INDICES, NORMALS, POSITIONS};
 
+use egui_winit_vulkano::{Gui, GuiConfig};
+
 use glam::{
   f32::{Mat3, Vec3},
   Mat4,
@@ -14,15 +16,14 @@ use vulkano::{
   },
   command_buffer::{
     allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-    RenderPassBeginInfo,
+    RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo
   },
   descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet, WriteDescriptorSet},
   device::{
-    physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned, Queue,
-    QueueCreateInfo, QueueFlags,
+    physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, DeviceOwned, Queue, QueueCreateInfo, QueueFlags
   },
   format::Format,
-  image::{view::ImageView, Image, ImageCreateInfo, ImageLayout, ImageType, ImageUsage},
+  image::{view::ImageView, Image, ImageCreateInfo, ImageType, ImageUsage},
   instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
   memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
   pipeline::{
@@ -31,7 +32,7 @@ use vulkano::{
       depth_stencil::{DepthState, DepthStencilState},
       input_assembly::InputAssemblyState,
       multisample::MultisampleState,
-      rasterization::RasterizationState,
+      rasterization::{PolygonMode, RasterizationState},
       vertex_input::{Vertex, VertexDefinition},
       viewport::{Viewport, ViewportState},
       GraphicsPipelineCreateInfo,
@@ -87,6 +88,24 @@ struct App {
   index_buffer: Subbuffer<[u16]>,
   uniform_buffer_allocator: SubbufferAllocator,
   rcx: Option<RenderContext>,
+  gui: Option<Gui>,
+  last_frame_time: Instant,
+  fps: f32,
+  // Camera state
+  camera_pos: Vec3,
+  camera_yaw: f32,
+  camera_pitch: f32,
+  // Smooth movement
+  camera_velocity: Vec3,
+  movement_acceleration: f32,
+  movement_deceleration: f32,
+  max_speed: f32,
+  movement_input: Vec3,
+  // Rendering settings
+  wireframe_mode: bool,
+  line_width: f32,
+  max_line_width: f32,
+  needs_pipeline_update: bool,
 }
 
 struct RenderContext {
@@ -99,6 +118,7 @@ struct RenderContext {
   pipeline: Arc<GraphicsPipeline>,
   recreate_swapchain: bool,
   previous_frame_end: Option<Box<dyn GpuFuture>>,
+  swapchain_image_views: Vec<Arc<ImageView>>,
   rotation_start: Instant,
 }
 
@@ -152,9 +172,14 @@ impl App {
     );
 
     let (device, mut queues) = Device::new(
-      physical_device,
+      physical_device.clone(),
       DeviceCreateInfo {
         enabled_extensions: device_extensions,
+        enabled_features: DeviceFeatures {
+          fill_mode_non_solid: true,  // Enable wireframe mode
+          wide_lines: true,           // Enable adjustable line width
+          ..DeviceFeatures::empty()
+        },
         queue_create_infos: vec![QueueCreateInfo {
           queue_family_index,
           ..Default::default()
@@ -163,6 +188,21 @@ impl App {
       },
     )
     .unwrap();
+
+    let supports_wide_lines = physical_device
+      .supported_features()
+      .wide_lines;
+
+    // Query maximum line width
+    let max_line_width = if supports_wide_lines {
+      let properties = physical_device.properties();
+      properties.line_width_range[1]
+    } else {
+      1.0
+    };
+
+    println!("Wide lines support: {}", supports_wide_lines);
+    println!("Maximum line width: {:.1}", max_line_width);
 
     let queue = queues.next().unwrap();
 
@@ -241,7 +281,66 @@ impl App {
       index_buffer,
       uniform_buffer_allocator,
       rcx: None,
+      gui: None,
+      last_frame_time: Instant::now(),
+      fps: 0.0,
+      // Camera settings
+      camera_pos: Vec3::new(-1.1, 0.1, 1.0),
+      camera_yaw: -std::f32::consts::FRAC_PI_4,
+      camera_pitch: 0.0,
+      // Smooth movement settings
+      camera_velocity: Vec3::ZERO,
+      movement_acceleration: 20.0,
+      movement_deceleration: 10.0,
+      max_speed: 2.0,
+      movement_input: Vec3::ZERO,
+      // Rendering settings
+      wireframe_mode: false,
+      line_width: 1.0,
+      max_line_width,
+      needs_pipeline_update: false,
     }
+  }
+
+  fn update_camera_movement(&mut self, delta_time: f32) {
+    // Calculate movement direction based on input
+    let forward = Vec3::new(
+      self.camera_yaw.cos(),
+      0.0,
+      self.camera_yaw.sin(),
+    ).normalize();
+    
+    let right = forward.cross(Vec3::new(0.0, -1.0, 0.0)).normalize();
+    
+    // Calculate target velocity based on input
+    let mut target_velocity = Vec3::ZERO;
+    if self.movement_input.length() > 0.0 {
+      // Combine horizontal movement
+      target_velocity += forward * self.movement_input.z;
+      target_velocity += right * self.movement_input.x;
+      // Add vertical movement
+      target_velocity.y = self.movement_input.y;
+      
+      // Normalize and scale to max speed if moving diagonally
+      if target_velocity.length() > 1.0 {
+        target_velocity = target_velocity.normalize();
+      }
+      target_velocity *= self.max_speed;
+    }
+
+    // Accelerate or decelerate towards target velocity
+    let acceleration = if target_velocity.length() > 0.0 {
+      self.movement_acceleration
+    } else {
+      self.movement_deceleration
+    };
+
+    // Update velocity with acceleration
+    let velocity_delta = (target_velocity - self.camera_velocity) * acceleration * delta_time;
+    self.camera_velocity += velocity_delta;
+
+    // Update position
+    self.camera_pos += self.camera_velocity * delta_time;
   }
 }
 
@@ -258,7 +357,6 @@ impl ApplicationHandler for App {
         )
         .unwrap(),
     );
-    window.set_blur(true);
 
     #[cfg(target_os = "windows")]
     {
@@ -317,7 +415,7 @@ impl ApplicationHandler for App {
 
       Swapchain::new(
         self.device.clone(),
-        surface,
+        surface.clone(),
         SwapchainCreateInfo {
           min_image_count: surface_capabilities.min_image_count.max(2),
           image_format,
@@ -333,30 +431,34 @@ impl ApplicationHandler for App {
       .unwrap()
     };
 
-    let render_pass = vulkano::single_pass_renderpass!(
+    let render_pass = vulkano::ordered_passes_renderpass!(
         self.device.clone(),
         attachments: {
-            color: {
+            final_color: {
                 format: swapchain.image_format(),
                 samples: 1,
                 load_op: Clear,
                 store_op: Store,
-                initial_layout: ImageLayout::Undefined,
-                final_layout: ImageLayout::PresentSrc,
             },
-            depth_stencil: {
+            depth: {
                 format: Format::D16_UNORM,
                 samples: 1,
                 load_op: Clear,
                 store_op: DontCare,
-                initial_layout: ImageLayout::Undefined,
-                final_layout: ImageLayout::DepthStencilAttachmentOptimal,
+            }
+        },
+        passes: [
+            {
+                color: [final_color],
+                depth_stencil: {depth},
+                input: []
             },
-        },
-        pass: {
-            color: [color],
-            depth_stencil: {depth_stencil},
-        },
+            {
+                color: [final_color],
+                depth_stencil: {},
+                input: []
+            }
+        ]
     )
     .unwrap();
 
@@ -369,6 +471,13 @@ impl ApplicationHandler for App {
       .entry_point("main")
       .unwrap();
 
+    let swapchain_image_views: Vec<_> = images
+      .iter()
+      .map(|image| {
+        ImageView::new_default(image.clone()).unwrap()
+      })
+      .collect();
+
     let (framebuffers, pipeline) = window_size_dependent_setup(
       window_size,
       &images,
@@ -376,11 +485,22 @@ impl ApplicationHandler for App {
       &self.memory_allocator,
       &vs,
       &fs,
+      self.wireframe_mode,
+      self.line_width,
     );
 
     let previous_frame_end = Some(sync::now(self.device.clone()).boxed());
 
     let rotation_start = Instant::now();
+
+    self.gui = Some(Gui::new_with_subpass(
+      event_loop,
+      surface.clone(),
+      self.queue.clone(),
+      Subpass::from(render_pass.clone(), 1).unwrap(),
+      swapchain.image_format(),
+      GuiConfig::default(),
+    ));
 
     self.rcx = Some(RenderContext {
       window,
@@ -392,6 +512,7 @@ impl ApplicationHandler for App {
       pipeline,
       recreate_swapchain: false,
       previous_frame_end,
+      swapchain_image_views,
       rotation_start,
     });
   }
@@ -402,6 +523,10 @@ impl ApplicationHandler for App {
     _window_id: WindowId,
     event: WindowEvent,
   ) {
+    if let Some(gui) = &mut self.gui {
+      let _pass_events_to_game = !gui.update(&event);
+    }
+
     let rcx = self.rcx.as_mut().unwrap();
 
     match event {
@@ -411,7 +536,50 @@ impl ApplicationHandler for App {
       WindowEvent::Resized(_) => {
         rcx.recreate_swapchain = true;
       }
+      WindowEvent::KeyboardInput { 
+        event: winit::event::KeyEvent {
+          physical_key: key,
+          state,
+          ..
+        },
+        ..
+      } => {
+        use winit::keyboard::PhysicalKey;
+        use winit::event::ElementState;
+        
+        let value = match state {
+          ElementState::Pressed => 1.0,
+          ElementState::Released => 0.0,
+        };
+
+        match key {
+          PhysicalKey::Code(winit::keyboard::KeyCode::KeyW) => {
+            self.movement_input.z = value;
+          }
+          PhysicalKey::Code(winit::keyboard::KeyCode::KeyS) => {
+            self.movement_input.z = -value;
+          }
+          PhysicalKey::Code(winit::keyboard::KeyCode::KeyA) => {
+            self.movement_input.x = -value;
+          }
+          PhysicalKey::Code(winit::keyboard::KeyCode::KeyD) => {
+            self.movement_input.x = value;
+          }
+          PhysicalKey::Code(winit::keyboard::KeyCode::Space) => {
+            self.movement_input.y = value;
+          }
+          PhysicalKey::Code(winit::keyboard::KeyCode::ShiftLeft) => {
+            self.movement_input.y = -value;
+          }
+          _ => {}
+        }
+      }
       WindowEvent::RedrawRequested => {
+        let now = Instant::now();
+        let frame_time = now.duration_since(self.last_frame_time).as_secs_f32();
+        self.update_camera_movement(frame_time);
+
+        let rcx = self.rcx.as_mut().unwrap();
         let window_size = rcx.window.inner_size();
 
         if window_size.width == 0 || window_size.height == 0 {
@@ -420,7 +588,7 @@ impl ApplicationHandler for App {
 
         rcx.previous_frame_end.as_mut().unwrap().cleanup_finished();
 
-        if rcx.recreate_swapchain {
+        if rcx.recreate_swapchain || self.needs_pipeline_update {
           let (new_swapchain, new_images) = rcx
             .swapchain
             .recreate(SwapchainCreateInfo {
@@ -430,6 +598,13 @@ impl ApplicationHandler for App {
             .expect("failed to recreate swapchain");
 
           rcx.swapchain = new_swapchain;
+          let swapchain_image_views: Vec<_> = new_images
+            .iter()
+            .map(|image| {
+              ImageView::new_default(image.clone()).unwrap()
+            })
+            .collect();
+          rcx.swapchain_image_views = swapchain_image_views;
           (rcx.framebuffers, rcx.pipeline) = window_size_dependent_setup(
             window_size,
             &new_images,
@@ -437,8 +612,11 @@ impl ApplicationHandler for App {
             &self.memory_allocator,
             &rcx.vs,
             &rcx.fs,
+            self.wireframe_mode,
+            self.line_width,
           );
           rcx.recreate_swapchain = false;
+          self.needs_pipeline_update = false;
         }
 
         let uniform_buffer = {
@@ -446,17 +624,20 @@ impl ApplicationHandler for App {
           let rotation = elapsed.as_secs() as f64 + elapsed.subsec_nanos() as f64 / 1_000_000_000.0;
           let rotation = Mat3::from_rotation_y(rotation as f32);
 
-          //  NOTE: This teapot was meant for OpenGL where the origin is at the lower left
-          // instead the origin is at the upper left in Vulkan, so we reverse the Y axis.
           let aspect_ratio =
             rcx.swapchain.image_extent()[0] as f32 / rcx.swapchain.image_extent()[1] as f32;
 
-          let proj =
-            Mat4::perspective_rh_gl(std::f32::consts::FRAC_PI_2, aspect_ratio, 0.01, 100.0);
+          let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, aspect_ratio, 0.01, 100.0);
+          
+          // Update view matrix based on camera position
           let view = Mat4::look_at_rh(
-            Vec3::new(0.3, 0.3, 1.0),
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.0, -1.0, 0.0),
+            self.camera_pos,
+            self.camera_pos + Vec3::new(
+              self.camera_yaw.cos(),
+              0.0,
+              self.camera_yaw.sin(),
+            ),
+            Vec3::new(0.0, -1.0, 0.0), // Keep Y-axis inverted for Vulkan
           );
           let scale = Mat4::from_scale(Vec3::splat(0.01));
 
@@ -495,6 +676,126 @@ impl ApplicationHandler for App {
           rcx.recreate_swapchain = true;
         }
 
+        // Update egui UI before rendering
+        if let Some(gui) = &mut self.gui {
+          gui.immediate_ui(|gui| {
+            egui::Window::new("Stats & Controls")
+              .default_pos([10.0, 10.0])
+              .show(&gui.context(), |ui| {
+                // Performance stats
+                ui.heading("Performance");
+                let now = Instant::now();
+                let frame_time = now.duration_since(self.last_frame_time).as_secs_f32();
+                self.fps = 1.0 / frame_time;
+                self.last_frame_time = now;
+                ui.label(format!("FPS: {:.1}", self.fps));
+                ui.label(format!("Frame Time: {:.2}ms", frame_time * 1000.0));
+                
+                ui.separator();
+                
+                // Camera position info
+                ui.heading("Camera Position");
+                ui.label(format!("X: {:.2}", self.camera_pos.x));
+                ui.label(format!("Y: {:.2}", self.camera_pos.y));
+                ui.label(format!("Z: {:.2}", self.camera_pos.z));
+                ui.label(format!("Yaw: {:.1}°", self.camera_yaw.to_degrees()));
+                
+                ui.separator();
+                
+                // Movement settings
+                ui.heading("Movement Settings");
+                ui.horizontal(|ui| {
+                    ui.label("Speed:");
+                    if ui.small_button("-").clicked() && self.max_speed > 0.5 {
+                        self.max_speed -= 0.5;
+                    }
+                    ui.label(format!("{:.1}", self.max_speed));
+                    if ui.small_button("+").clicked() {
+                        self.max_speed += 0.5;
+                    }
+                });
+                
+                ui.horizontal(|ui| {
+                    ui.label("Acceleration:");
+                    if ui.small_button("-").clicked() && self.movement_acceleration > 1.0 {
+                        self.movement_acceleration -= 1.0;
+                    }
+                    ui.label(format!("{:.1}", self.movement_acceleration));
+                    if ui.small_button("+").clicked() {
+                        self.movement_acceleration += 1.0;
+                    }
+                });
+                
+                ui.horizontal(|ui| {
+                    ui.label("Deceleration:");
+                    if ui.small_button("-").clicked() && self.movement_deceleration > 1.0 {
+                        self.movement_deceleration -= 1.0;
+                    }
+                    ui.label(format!("{:.1}", self.movement_deceleration));
+                    if ui.small_button("+").clicked() {
+                        self.movement_deceleration += 1.0;
+                    }
+                });
+                
+                // Current velocity display
+                ui.label(format!("Current Speed: {:.2}", self.camera_velocity.length()));
+                
+                ui.separator();
+                
+                // Rendering settings
+                ui.heading("Rendering");
+                let mut wireframe = self.wireframe_mode;
+                if ui.checkbox(&mut wireframe, "Wireframe Mode").changed() {
+                    self.wireframe_mode = wireframe;
+                    self.needs_pipeline_update = true;
+                }
+                
+                if self.wireframe_mode {
+                    ui.horizontal(|ui| {
+                        ui.label("Line Width:");
+                        let device = self.device.physical_device();
+                        let supports_wide_lines = device.supported_features().wide_lines;
+                        
+                        if supports_wide_lines {
+                            let mut width = self.line_width;
+                            if ui.add(egui::Slider::new(&mut width, 1.0..=self.max_line_width)
+                                .step_by(0.1)
+                            ).changed() {
+                                self.line_width = width;
+                                self.needs_pipeline_update = true;
+                            }
+                        } else {
+                            ui.label("1.0 (Wide lines not supported)");
+                            self.line_width = 1.0;
+                        }
+                    });
+                }
+                
+                ui.separator();
+                
+                // Controls help
+                ui.heading("Controls");
+                ui.label("WASD - Move horizontally");
+                ui.label("Space/Shift - Move up/down");
+                
+                ui.separator();
+                
+                // Reset buttons
+                if ui.button("Reset Camera Position").clicked() {
+                    self.camera_pos = Vec3::new(-1.1, 0.1, 1.0);
+                    self.camera_yaw = -std::f32::consts::FRAC_PI_4;
+                    self.camera_pitch = 0.0;
+                    self.camera_velocity = Vec3::ZERO;
+                }
+                if ui.button("Reset Movement Settings").clicked() {
+                    self.max_speed = 2.0;
+                    self.movement_acceleration = 20.0;
+                    self.movement_deceleration = 10.0;
+                }
+              });
+          });
+        }
+
         let mut builder = AutoCommandBufferBuilder::primary(
           self.command_buffer_allocator.clone(),
           self.queue.queue_family_index(),
@@ -505,12 +806,20 @@ impl ApplicationHandler for App {
         builder
           .begin_render_pass(
             RenderPassBeginInfo {
-              clear_values: vec![Some([0.0, 0.0, 0.0, 0.0].into()), Some(1f32.into())],
+              clear_values: vec![
+                Some([0.0, 0.0, 0.0, 1.0].into()),
+                Some(1.0.into()),
+              ],
               ..RenderPassBeginInfo::framebuffer(rcx.framebuffers[image_index as usize].clone())
             },
-            Default::default(),
+            SubpassBeginInfo {
+              contents: SubpassContents::Inline,
+              ..Default::default()
+            },
           )
-          .unwrap()
+          .unwrap();
+
+        builder
           .bind_pipeline_graphics(rcx.pipeline.clone())
           .unwrap()
           .bind_descriptor_sets(
@@ -527,34 +836,54 @@ impl ApplicationHandler for App {
 
         unsafe { builder.draw_indexed(self.index_buffer.len() as u32, 1, 0, 0, 0) }.unwrap();
 
-        builder.end_render_pass(Default::default()).unwrap();
+        // Move to the egui subpass
+        builder.next_subpass(
+            SubpassEndInfo::default(),
+            SubpassBeginInfo {
+                contents: SubpassContents::SecondaryCommandBuffers,
+                ..Default::default()
+            },
+        ).unwrap();
 
+        // Draw egui in the second subpass
+        if let Some(gui) = &mut self.gui {
+            let cb = gui.draw_on_subpass_image([rcx.swapchain.image_extent()[0], rcx.swapchain.image_extent()[1]]);
+            builder.execute_commands(cb).unwrap();
+        }
+
+        // End the render pass
+        builder.end_render_pass(SubpassEndInfo::default()).unwrap();
+
+        // Build and execute the command buffer
         let command_buffer = builder.build().unwrap();
-        let future = rcx
-          .previous_frame_end
-          .take()
-          .unwrap()
-          .join(acquire_future)
-          .then_execute(self.queue.clone(), command_buffer)
-          .unwrap()
-          .then_swapchain_present(
-            self.queue.clone(),
-            SwapchainPresentInfo::swapchain_image_index(rcx.swapchain.clone(), image_index),
-          )
-          .then_signal_fence_and_flush();
+        let final_future = rcx
+            .previous_frame_end
+            .take()
+            .unwrap()
+            .join(acquire_future)
+            .then_execute(self.queue.clone(), command_buffer)
+            .unwrap();
+
+        // Present the final image
+        let future = final_future
+            .then_swapchain_present(
+                self.queue.clone(),
+                SwapchainPresentInfo::swapchain_image_index(rcx.swapchain.clone(), image_index),
+            )
+            .then_signal_fence_and_flush();
 
         match future.map_err(Validated::unwrap) {
-          Ok(future) => {
-            rcx.previous_frame_end = Some(future.boxed());
-          }
-          Err(VulkanError::OutOfDate) => {
-            rcx.recreate_swapchain = true;
-            rcx.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
-          }
-          Err(e) => {
-            println!("failed to flush future: {e}");
-            rcx.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
-          }
+            Ok(future) => {
+              rcx.previous_frame_end = Some(future.boxed());
+            }
+            Err(VulkanError::OutOfDate) => {
+              rcx.recreate_swapchain = true;
+              rcx.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
+            }
+            Err(e) => {
+              println!("failed to flush future: {e}");
+              rcx.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
+            }
         }
       }
       _ => {}
@@ -575,9 +904,18 @@ fn window_size_dependent_setup(
   memory_allocator: &Arc<StandardMemoryAllocator>,
   vs: &EntryPoint,
   fs: &EntryPoint,
+  wireframe_mode: bool,
+  line_width: f32,
 ) -> (Vec<Arc<Framebuffer>>, Arc<GraphicsPipeline>) {
   let device = memory_allocator.device();
-
+  
+  // Always use line width 1.0 if wide lines are not supported
+  let actual_line_width = if device.physical_device().supported_features().wide_lines {
+      line_width
+  } else {
+      1.0
+  };
+  
   let depth_buffer = ImageView::new_default(
     Image::new(
       memory_allocator.clone(),
@@ -653,6 +991,12 @@ fn window_size_dependent_setup(
         }),
         rasterization_state: Some(RasterizationState {
           cull_mode: vulkano::pipeline::graphics::rasterization::CullMode::None,
+          polygon_mode: if wireframe_mode {
+            PolygonMode::Line
+          } else {
+            PolygonMode::Fill
+          },
+          line_width: actual_line_width,
           ..Default::default()
         }),
         depth_stencil_state: Some(DepthStencilState {
