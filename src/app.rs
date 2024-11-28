@@ -1,29 +1,56 @@
-use std::{sync::Arc, time::Duration, time::Instant};
+//! Main application logic and Vulkan initialization.
+//!
+//! This module handles:
+//! * Vulkan device selection and initialization
+//! * Window and event management
+//! * Resource creation and management
+//! * Render loop coordination
+//! * Camera and input handling
+
+use std::{
+  sync::Arc,
+  time::{Duration, Instant},
+};
 
 use egui_winit_vulkano::{Gui, GuiConfig};
-
 use glam::{DMat3, DMat4, DVec3, Mat4};
-
 use vulkano::{
   buffer::{
     allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo},
-    Buffer, BufferCreateInfo, BufferUsage,
+    Buffer,
+    BufferCreateInfo,
+    BufferUsage,
   },
   command_buffer::{
-    allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-    CopyBufferToImageInfo, PrimaryCommandBufferAbstract, RenderPassBeginInfo, SubpassBeginInfo,
-    SubpassContents, SubpassEndInfo,
+    allocator::StandardCommandBufferAllocator,
+    AutoCommandBufferBuilder,
+    CommandBufferUsage,
+    CopyBufferToImageInfo,
+    PrimaryCommandBufferAbstract,
+    RenderPassBeginInfo,
+    SubpassBeginInfo,
+    SubpassContents,
+    SubpassEndInfo,
   },
   descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet, WriteDescriptorSet},
   device::{
-    physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures,
-    Queue, QueueCreateInfo, QueueFlags,
+    physical::PhysicalDeviceType,
+    Device,
+    DeviceCreateInfo,
+    DeviceExtensions,
+    DeviceFeatures,
+    Queue,
+    QueueCreateInfo,
+    QueueFlags,
   },
   format::Format,
   image::{
     sampler::{Sampler, SamplerCreateInfo},
     view::ImageView,
-    Image, ImageCreateInfo, ImageType, ImageUsage,
+    Image,
+    ImageCreateInfo,
+    ImageType,
+    ImageUsage,
   },
   instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
   memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
@@ -31,9 +58,10 @@ use vulkano::{
   render_pass::Subpass,
   swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
   sync::{self, GpuFuture},
-  Validated, VulkanError, VulkanLibrary,
+  Validated,
+  VulkanError,
+  VulkanLibrary,
 };
-
 use winit::{
   application::ApplicationHandler,
   dpi::{LogicalPosition, LogicalSize},
@@ -48,6 +76,13 @@ use crate::{
   shaders::{fs, vs},
 };
 
+/// Main application state containing all Vulkan and window resources.
+///
+/// This struct is responsible for:
+/// * Managing the Vulkan instance, device, and queues
+/// * Coordinating rendering operations
+/// * Handling window events and user input
+/// * Managing the camera and scene state
 pub struct App {
   instance: Arc<Instance>,
   device: Arc<Device>,
@@ -86,6 +121,17 @@ pub struct App {
 }
 
 impl App {
+  /// Creates a new application instance and initializes all Vulkan resources.
+  ///
+  /// This function:
+  /// * Creates the Vulkan instance and selects a suitable physical device
+  /// * Sets up the logical device and command queues
+  /// * Creates the swapchain and render passes
+  /// * Loads the 3D model and textures
+  /// * Initializes the GUI system
+  ///
+  /// # Parameters
+  /// * `event_loop` - The winit event loop to create the window for
   pub fn new(event_loop: &EventLoop<()>) -> Self {
     let library = VulkanLibrary::new().unwrap();
     let required_extensions = Surface::required_extensions(event_loop).unwrap();
@@ -305,7 +351,14 @@ impl App {
     }
   }
 
-  fn update_camera_movement(&mut self, delta_time: f64) {
+  /// Updates camera position and orientation based on current movement state.
+  ///
+  /// Applies velocity and acceleration to smoothly move the camera
+  /// according to user input.
+  ///
+  /// # Parameters
+  /// * `delta_time` - Time elapsed since last update in seconds
+  pub fn update_camera_movement(&mut self, delta_time: f64) {
     // Calculate movement direction based on input
     let forward = DVec3::new(self.camera_yaw.cos(), 0.0, self.camera_yaw.sin()).normalize();
 
@@ -344,6 +397,10 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+  /// Handles application resume events.
+  ///
+  /// Called when the application window gains focus or is restored.
+  /// Recreates any resources that may have been lost during suspension.
   fn resumed(&mut self, event_loop: &ActiveEventLoop) {
     let window = Arc::new(
       event_loop
@@ -504,6 +561,13 @@ impl ApplicationHandler for App {
     });
   }
 
+  /// Processes window events such as resizing, keyboard input, and mouse movement.
+  ///
+  /// Handles:
+  /// * Window resize events by recreating the swapchain
+  /// * Keyboard input for camera movement
+  /// * Mouse input for camera rotation
+  /// * Window close events
   fn window_event(
     &mut self,
     event_loop: &ActiveEventLoop,
@@ -533,8 +597,7 @@ impl ApplicationHandler for App {
           },
         ..
       } => {
-        use winit::event::ElementState;
-        use winit::keyboard::PhysicalKey;
+        use winit::{event::ElementState, keyboard::PhysicalKey};
 
         let value = match state {
           ElementState::Pressed => 1.0,
@@ -960,6 +1023,10 @@ impl ApplicationHandler for App {
     }
   }
 
+  /// Processes raw device events such as mouse movement.
+  ///
+  /// Used primarily for camera control, converting raw mouse movement
+  /// into camera rotation.
   fn device_event(
     &mut self,
     _event_loop: &ActiveEventLoop,
@@ -992,6 +1059,9 @@ impl ApplicationHandler for App {
     }
   }
 
+  /// Called when the event loop is about to wait for new events.
+  ///
+  /// Used to perform any necessary cleanup or state updates between frames.
   fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
     let rcx = self.rcx.as_mut().unwrap();
     rcx.window.request_redraw();

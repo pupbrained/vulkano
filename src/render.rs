@@ -1,4 +1,13 @@
+//! Vulkan rendering pipeline and context management.
+//!
+//! This module handles the core rendering functionality including:
+//! * Swapchain management
+//! * Pipeline creation and configuration
+//! * Framebuffer setup
+//! * Render pass configuration
+
 use std::sync::Arc;
+
 use vulkano::{
   device::DeviceOwned,
   format::Format,
@@ -16,7 +25,9 @@ use vulkano::{
       GraphicsPipelineCreateInfo,
     },
     layout::PipelineDescriptorSetLayoutCreateInfo,
-    GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo,
+    GraphicsPipeline,
+    PipelineLayout,
+    PipelineShaderStageCreateInfo,
   },
   render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
   shader::EntryPoint,
@@ -27,33 +38,70 @@ use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::vertex::{Normal, Position, TexCoord};
 
+/// Core rendering context containing all Vulkan resources needed for rendering.
+///
+/// This struct maintains ownership of critical Vulkan objects and manages their lifecycle.
+/// It includes the window, swapchain, render pass, framebuffers, and graphics pipeline.
 pub struct RenderContext {
+  /// The window being rendered to
   pub window: Arc<Window>,
+  /// Vulkan swapchain for presenting rendered images
   pub swapchain: Arc<Swapchain>,
+  /// Render pass defining the rendering operations
   pub render_pass: Arc<RenderPass>,
+  /// Framebuffers for each swapchain image
   pub framebuffers: Vec<Arc<Framebuffer>>,
+  /// Compiled vertex shader
   pub vs: EntryPoint,
+  /// Compiled fragment shader
   pub fs: EntryPoint,
+  /// Graphics pipeline containing all render state
   pub pipeline: Arc<GraphicsPipeline>,
+  /// Flag indicating if swapchain needs recreation
   pub recreate_swapchain: bool,
+  /// Synchronization primitive for frame rendering
   pub previous_frame_end: Option<Box<dyn GpuFuture>>,
+  /// Views into the swapchain images
   pub swapchain_image_views: Vec<Arc<ImageView>>,
 }
 
-/// Configuration for window size dependent setup
+/// Configuration for window size dependent setup.
+///
+/// Contains all resources needed to recreate the pipeline and framebuffers
+/// when the window is resized.
 #[derive(Clone)]
 pub struct WindowSizeSetupConfig<'a> {
+  /// Current window dimensions
   pub window_size: PhysicalSize<u32>,
+  /// Swapchain images
   pub images: &'a [Arc<Image>],
+  /// Render pass to create framebuffers for
   pub render_pass: &'a Arc<RenderPass>,
+  /// Memory allocator for creating new resources
   pub memory_allocator: &'a Arc<StandardMemoryAllocator>,
+  /// Vertex shader to use in pipeline
   pub vertex_shader: &'a EntryPoint,
+  /// Fragment shader to use in pipeline
   pub fragment_shader: &'a EntryPoint,
+  /// Flag to enable wireframe rendering
   pub wireframe_mode: bool,
+  /// Line width for wireframe rendering
   pub line_width: f32,
 }
 
-/// This function is called once during initialization, then again whenever the window is resized.
+/// Creates or recreates window size dependent resources.
+///
+/// This function is called during initialization and whenever the window is resized.
+/// It handles:
+/// * Creating new framebuffers for the current window size
+/// * Setting up the graphics pipeline with appropriate viewport
+/// * Configuring render states (blending, depth testing, etc.)
+///
+/// # Parameters
+/// * `config` - Configuration containing all required resources
+///
+/// # Returns
+/// A tuple containing the new framebuffers and graphics pipeline
 pub fn window_size_dependent_setup(
   config: WindowSizeSetupConfig,
 ) -> (Vec<Arc<Framebuffer>>, Arc<GraphicsPipeline>) {

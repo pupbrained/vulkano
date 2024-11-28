@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use vulkano::{
   buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
   memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
@@ -6,6 +7,13 @@ use vulkano::{
 
 use crate::{Normal, Position, TexCoord};
 
+/// Represents the GPU buffers containing the 3D model data for the Viking Room.
+///
+/// This struct holds four Vulkan buffers:
+/// * positions: Vertex positions in 3D space
+/// * normals: Vertex normal vectors used for lighting calculations
+/// * tex_coords: Texture coordinates for mapping textures onto the model
+/// * indices: Index buffer defining the triangles that make up the model
 pub struct VikingRoomModelBuffers {
   pub positions: Subbuffer<[Position]>,
   pub normals: Subbuffer<[Normal]>,
@@ -13,6 +21,23 @@ pub struct VikingRoomModelBuffers {
   pub indices: Subbuffer<[u32]>,
 }
 
+/// Loads the Viking Room 3D model from an OBJ file and creates GPU buffers for rendering.
+///
+/// This function performs the following steps:
+/// 1. Loads and triangulates the OBJ model from "models/viking_room.obj"
+/// 2. Extracts vertex data (positions, normals, texture coordinates)
+/// 3. Creates Vulkan buffers for the extracted data optimized for GPU access
+///
+/// # Parameters
+/// * `memory_allocator` - The Vulkan memory allocator used to create the GPU buffers
+///
+/// # Returns
+/// Returns a `VikingRoomModelBuffers` containing all the necessary buffers for rendering
+///
+/// # Panics
+/// Will panic if:
+/// * The OBJ file cannot be loaded
+/// * Buffer creation fails
 pub fn load_viking_room_model(
   memory_allocator: Arc<StandardMemoryAllocator>,
 ) -> VikingRoomModelBuffers {
