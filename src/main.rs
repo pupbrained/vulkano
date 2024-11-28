@@ -65,8 +65,6 @@ use windows::{
   Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE},
 };
 
-use tobj;
-
 #[derive(BufferContents, Vertex)]
 #[repr(C)]
 struct Position {
@@ -303,9 +301,12 @@ impl App {
       DeviceCreateInfo {
         enabled_extensions: device_extensions,
         enabled_features: DeviceFeatures {
-          fill_mode_non_solid: true,       // Enable wireframe mode
-          wide_lines: true,                // Enable adjustable line width
+          fill_mode_non_solid: true, // Enable wireframe mode
+          wide_lines: true,          // Enable adjustable line width
+          #[cfg(target_os = "macos")]
           image_view_format_swizzle: true, // Enable image view format swizzling
+          #[cfg(not(target_os = "macos"))]
+          image_view_format_swizzle: false,
           ..DeviceFeatures::empty()
         },
         queue_create_infos: vec![QueueCreateInfo {
@@ -486,23 +487,22 @@ impl App {
       if target_velocity.length() > 1.0 {
         target_velocity = target_velocity.normalize();
       }
-      target_velocity *= self.max_speed as f64;
+      target_velocity *= self.max_speed;
     }
 
     // Accelerate or decelerate towards target velocity
     let acceleration = if target_velocity.length() > 0.0 {
-      self.movement_acceleration as f64
+      self.movement_acceleration
     } else {
-      self.movement_deceleration as f64
+      self.movement_deceleration
     };
 
     // Update velocity with acceleration
-    let velocity_delta =
-      (target_velocity - self.camera_velocity) * acceleration * delta_time as f64;
+    let velocity_delta = (target_velocity - self.camera_velocity) * acceleration * delta_time;
     self.camera_velocity += velocity_delta;
 
     // Update position
-    self.camera_pos += self.camera_velocity * delta_time as f64;
+    self.camera_pos += self.camera_velocity * delta_time;
   }
 }
 
@@ -977,14 +977,12 @@ impl ApplicationHandler for App {
                       if ui
                         .add(egui::Slider::new(&mut width, 1.0..=self.max_line_width).step_by(0.1))
                         .changed()
-                      {
-                        if now.duration_since(self.last_line_width_update)
+                        && now.duration_since(self.last_line_width_update)
                           > self.line_width_update_interval
-                        {
-                          self.line_width = width;
-                          self.needs_pipeline_update = true;
-                          self.last_line_width_update = now;
-                        }
+                      {
+                        self.line_width = width;
+                        self.needs_pipeline_update = true;
+                        self.last_line_width_update = now;
                       }
                     } else {
                       ui.label("1.0 (Wide lines not supported)");
