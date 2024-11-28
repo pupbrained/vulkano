@@ -62,6 +62,12 @@
               LD_LIBRARY_PATH = "${lib.makeLibraryPath deps}";
               SHADERC_LIB_DIR = "${pkgs.shaderc.lib}/lib";
 
+              ${
+                if stdenv.isDarwin
+                then "VK_ICD_FILENAMES"
+                else null
+              } = "${darwin.moltenvk}/share/vulkan/icd.d/MoltenVK_icd.json";
+
               name = "Vulkan";
             };
           }
