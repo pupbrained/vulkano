@@ -65,7 +65,7 @@ pub fn window_size_dependent_setup(
       config.memory_allocator.clone(),
       ImageCreateInfo {
         image_type: ImageType::Dim2d,
-        format: Format::D16_UNORM,
+        format: Format::D32_SFLOAT,
         extent: config.images[0].extent(),
         usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
         samples: vulkano::image::SampleCount::Sample4,

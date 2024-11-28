@@ -432,7 +432,7 @@ impl ApplicationHandler for App {
                 store_op: Store,
             },
             depth: {
-                format: Format::D16_UNORM,
+                format: Format::D32_SFLOAT,
                 samples: 4,
                 load_op: Clear,
                 store_op: DontCare,
