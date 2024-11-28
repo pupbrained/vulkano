@@ -22,7 +22,7 @@ use vulkano::{
     QueueCreateInfo, QueueFlags,
   },
   format::Format,
-  image::{view::ImageView, Image, ImageCreateInfo, ImageType, ImageUsage},
+  image::{view::ImageView, Image, ImageCreateInfo, ImageLayout, ImageType, ImageUsage},
   instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
   memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
   pipeline::{
@@ -48,10 +48,19 @@ use vulkano::{
 
 use winit::{
   application::ApplicationHandler,
-  dpi::PhysicalSize,
+  dpi::{LogicalSize, PhysicalSize},
   event::WindowEvent,
   event_loop::{ActiveEventLoop, EventLoop},
   window::{Window, WindowId},
+};
+
+#[cfg(target_os = "windows")]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+#[cfg(target_os = "windows")]
+use windows::{
+  Win32::Foundation::HWND,
+  Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE},
 };
 
 mod model;
@@ -240,9 +249,35 @@ impl ApplicationHandler for App {
   fn resumed(&mut self, event_loop: &ActiveEventLoop) {
     let window = Arc::new(
       event_loop
-        .create_window(Window::default_attributes())
+        .create_window(
+          Window::default_attributes()
+            .with_decorations(true)
+            .with_transparent(true)
+            .with_title("Vulkano App")
+            .with_inner_size(LogicalSize::new(800, 600)),
+        )
         .unwrap(),
     );
+    window.set_blur(true);
+
+    #[cfg(target_os = "windows")]
+    {
+      // Apply Mica effect (Windows 11 only)
+      if let Ok(handle) = window.window_handle() {
+        if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+          unsafe {
+            DwmSetWindowAttribute(
+              HWND(handle.hwnd.get() as *mut _),
+              DWMWA_SYSTEMBACKDROP_TYPE,
+              &DWMSBT_MAINWINDOW as *const _ as *const _,
+              std::mem::size_of::<i32>() as u32,
+            )
+            .ok();
+          }
+        }
+      }
+    }
+
     let surface = Surface::from_window(self.instance.clone(), window.clone()).unwrap();
     let window_size = window.inner_size();
 
@@ -252,11 +287,33 @@ impl ApplicationHandler for App {
         .physical_device()
         .surface_capabilities(&surface, Default::default())
         .unwrap();
+
+      println!(
+        "Supported composite alpha modes: {:?}",
+        surface_capabilities.supported_composite_alpha
+      );
+
       let (image_format, _) = self
         .device
         .physical_device()
         .surface_formats(&surface, Default::default())
-        .unwrap()[0];
+        .unwrap()
+        .into_iter()
+        .find(|(format, _)| {
+          matches!(
+            format,
+            Format::B8G8R8A8_UNORM | Format::R8G8B8A8_UNORM | Format::A8B8G8R8_UNORM_PACK32
+          )
+        })
+        .unwrap_or_else(|| {
+          self
+            .device
+            .physical_device()
+            .surface_formats(&surface, Default::default())
+            .unwrap()[0]
+        });
+
+      println!("Selected format: {:?}", image_format);
 
       Swapchain::new(
         self.device.clone(),
@@ -265,12 +322,11 @@ impl ApplicationHandler for App {
           min_image_count: surface_capabilities.min_image_count.max(2),
           image_format,
           image_extent: window_size.into(),
-          image_usage: ImageUsage::COLOR_ATTACHMENT,
-          composite_alpha: surface_capabilities
-            .supported_composite_alpha
-            .into_iter()
-            .next()
-            .unwrap(),
+          image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+          composite_alpha: vulkano::swapchain::CompositeAlpha::Opaque,
+          pre_transform: surface_capabilities.current_transform,
+          present_mode: vulkano::swapchain::PresentMode::Mailbox,
+          clipped: true,
           ..Default::default()
         },
       )
@@ -285,12 +341,16 @@ impl ApplicationHandler for App {
                 samples: 1,
                 load_op: Clear,
                 store_op: Store,
+                initial_layout: ImageLayout::Undefined,
+                final_layout: ImageLayout::PresentSrc,
             },
             depth_stencil: {
                 format: Format::D16_UNORM,
                 samples: 1,
                 load_op: Clear,
                 store_op: DontCare,
+                initial_layout: ImageLayout::Undefined,
+                final_layout: ImageLayout::DepthStencilAttachmentOptimal,
             },
         },
         pass: {
@@ -445,7 +505,7 @@ impl ApplicationHandler for App {
         builder
           .begin_render_pass(
             RenderPassBeginInfo {
-              clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into()), Some(1f32.into())],
+              clear_values: vec![Some([0.0, 0.0, 0.0, 0.0].into()), Some(1f32.into())],
               ..RenderPassBeginInfo::framebuffer(rcx.framebuffers[image_index as usize].clone())
             },
             Default::default(),
@@ -591,7 +651,10 @@ fn window_size_dependent_setup(
           .collect(),
           ..Default::default()
         }),
-        rasterization_state: Some(RasterizationState::default()),
+        rasterization_state: Some(RasterizationState {
+          cull_mode: vulkano::pipeline::graphics::rasterization::CullMode::None,
+          ..Default::default()
+        }),
         depth_stencil_state: Some(DepthStencilState {
           depth: Some(DepthState::simple()),
           ..Default::default()
@@ -599,7 +662,20 @@ fn window_size_dependent_setup(
         multisample_state: Some(MultisampleState::default()),
         color_blend_state: Some(ColorBlendState::with_attachment_states(
           subpass.num_color_attachments(),
-          ColorBlendAttachmentState::default(),
+          ColorBlendAttachmentState {
+            blend: Some(vulkano::pipeline::graphics::color_blend::AttachmentBlend {
+              src_color_blend_factor:
+                vulkano::pipeline::graphics::color_blend::BlendFactor::SrcAlpha,
+              dst_color_blend_factor:
+                vulkano::pipeline::graphics::color_blend::BlendFactor::OneMinusSrcAlpha,
+              color_blend_op: vulkano::pipeline::graphics::color_blend::BlendOp::Add,
+              src_alpha_blend_factor: vulkano::pipeline::graphics::color_blend::BlendFactor::One,
+              dst_alpha_blend_factor: vulkano::pipeline::graphics::color_blend::BlendFactor::Zero,
+              alpha_blend_op: vulkano::pipeline::graphics::color_blend::BlendOp::Add,
+            }),
+            color_write_mask: vulkano::pipeline::graphics::color_blend::ColorComponents::all(),
+            ..Default::default()
+          },
         )),
         subpass: Some(subpass.into()),
         ..GraphicsPipelineCreateInfo::layout(layout)
