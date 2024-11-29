@@ -17,40 +17,23 @@ use glam::{DMat3, DMat4, DVec3, Mat4};
 use vulkano::{
   buffer::{
     allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo},
-    Buffer,
-    BufferCreateInfo,
-    BufferUsage,
+    Buffer, BufferCreateInfo, BufferUsage,
   },
   command_buffer::{
-    allocator::StandardCommandBufferAllocator,
-    AutoCommandBufferBuilder,
-    CommandBufferUsage,
-    CopyBufferToImageInfo,
-    PrimaryCommandBufferAbstract,
-    RenderPassBeginInfo,
-    SubpassBeginInfo,
-    SubpassContents,
-    SubpassEndInfo,
+    allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
+    CopyBufferToImageInfo, PrimaryCommandBufferAbstract, RenderPassBeginInfo, SubpassBeginInfo,
+    SubpassContents, SubpassEndInfo,
   },
   descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet, WriteDescriptorSet},
   device::{
-    physical::PhysicalDeviceType,
-    Device,
-    DeviceCreateInfo,
-    DeviceExtensions,
-    DeviceFeatures,
-    Queue,
-    QueueCreateInfo,
-    QueueFlags,
+    physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures,
+    Queue, QueueCreateInfo, QueueFlags,
   },
   format::Format,
   image::{
     sampler::{Sampler, SamplerCreateInfo},
     view::ImageView,
-    Image,
-    ImageCreateInfo,
-    ImageType,
-    ImageUsage,
+    Image, ImageCreateInfo, ImageType, ImageUsage,
   },
   instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
   memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
@@ -58,9 +41,7 @@ use vulkano::{
   render_pass::Subpass,
   swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
   sync::{self, GpuFuture},
-  Validated,
-  VulkanError,
-  VulkanLibrary,
+  Validated, VulkanError, VulkanLibrary,
 };
 use winit::{
   application::ApplicationHandler,
@@ -409,10 +390,14 @@ impl ApplicationHandler for App {
             .with_decorations(true)
             .with_title("Vulkano App")
             .with_inner_size(LogicalSize::new(1280, 720))
-            .with_position(LogicalPosition::new(
-              (event_loop.primary_monitor().unwrap().size().width as i32 - 1280) / 2,
-              (event_loop.primary_monitor().unwrap().size().height as i32 - 720) / 2,
-            )),
+            .with_position(if !cfg!(target_os = "linux") {
+              LogicalPosition::new(
+                (event_loop.primary_monitor().unwrap().size().width as i32 - 1280) / 2,
+                (event_loop.primary_monitor().unwrap().size().height as i32 - 720) / 2,
+              )
+            } else {
+              LogicalPosition::new(0, 0) // Default position on Linux
+            }),
         )
         .unwrap(),
     );
@@ -599,6 +584,21 @@ impl ApplicationHandler for App {
       } => {
         use winit::{event::ElementState, keyboard::PhysicalKey};
 
+        if !self.cursor_captured {
+          // Only handle Escape key when cursor is not captured
+          if let PhysicalKey::Code(winit::keyboard::KeyCode::Escape) = key {
+            if state == ElementState::Pressed {
+              self.cursor_captured = false;
+              rcx
+                .window
+                .set_cursor_grab(winit::window::CursorGrabMode::None)
+                .unwrap();
+              rcx.window.set_cursor_visible(true);
+            }
+          }
+          return;
+        }
+
         let value = match state {
           ElementState::Pressed => 1.0,
           ElementState::Released => 0.0,
@@ -648,10 +648,12 @@ impl ApplicationHandler for App {
       } => {
         if button == MouseButton::Left && pass_events_to_game && state == ElementState::Pressed {
           self.cursor_captured = true;
-          rcx
-            .window
-            .set_cursor_grab(winit::window::CursorGrabMode::Confined)
-            .unwrap();
+          // Try Locked mode first, fall back to Confined if not supported
+          if rcx.window.set_cursor_grab(winit::window::CursorGrabMode::Locked).is_err() {
+            rcx.window
+              .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+              .unwrap();
+          }
           rcx.window.set_cursor_visible(false);
         }
       }
