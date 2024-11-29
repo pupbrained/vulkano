@@ -22,6 +22,9 @@ pub mod shaders;
 /// Vertex attribute definitions and format specifications
 pub mod vertex;
 
+// command buffer builder functions
+pub mod command_buffer_builder_ext;
+
 // Re-export commonly used items
 pub use app::App;
 pub use camera::Camera;
