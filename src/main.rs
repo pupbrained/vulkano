@@ -50,8 +50,8 @@ use vulkano::{
 
 use winit::{
   application::ApplicationHandler,
-  dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
-  event::{ElementState, MouseButton, WindowEvent},
+  dpi::{LogicalPosition, LogicalSize, PhysicalSize},
+  event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
   event_loop::{ActiveEventLoop, EventLoop},
   window::{Window, WindowId},
 };
@@ -224,7 +224,6 @@ struct App {
   needs_pipeline_update: bool,
   last_line_width_update: Instant,
   line_width_update_interval: Duration,
-  last_cursor_position: PhysicalPosition<f64>,
   cursor_captured: bool,
 }
 
@@ -456,7 +455,6 @@ impl App {
       needs_pipeline_update: false,
       last_line_width_update: Instant::now(),
       line_width_update_interval: Duration::from_millis(100),
-      last_cursor_position: PhysicalPosition::new(0.0, 0.0),
       cursor_captured: false,
     }
   }
@@ -716,6 +714,16 @@ impl ApplicationHandler for App {
           PhysicalKey::Code(winit::keyboard::KeyCode::ShiftLeft) => {
             self.movement_input.y = -value;
           }
+          PhysicalKey::Code(winit::keyboard::KeyCode::Escape) => {
+            if state == ElementState::Pressed {
+              self.cursor_captured = false;
+              rcx
+                .window
+                .set_cursor_grab(winit::window::CursorGrabMode::None)
+                .unwrap();
+              rcx.window.set_cursor_visible(true);
+            }
+          }
           _ => {}
         }
 
@@ -724,45 +732,22 @@ impl ApplicationHandler for App {
           rcx.previous_frame_end.as_mut().unwrap().cleanup_finished();
         }
       }
-      WindowEvent::CursorMoved {
-        position, ..
-      } => {
-        if self.cursor_captured && pass_events_to_game {
-          let sensitivity = 0.005; // Adjust sensitivity to a lower value
-          let delta_x = self.last_cursor_position.x - position.x; // Invert X-axis movement
-          let delta_y = position.y - self.last_cursor_position.y; // Correct Y-axis movement
-
-          self.camera_yaw += delta_x * sensitivity;
-          // Clamp yaw to keep it within -2π to 2π range
-          self.camera_yaw %= 2.0 * std::f64::consts::PI;
-          self.camera_pitch -= delta_y * sensitivity;
-
-          // Clamp the pitch to prevent flipping
-          self.camera_pitch = self
-            .camera_pitch
-            .clamp(-89.0f64.to_radians(), 89.0f64.to_radians());
-
-          // Update the camera's direction
-          let direction = DVec3::new(
-            self.camera_yaw.cos() * self.camera_pitch.cos(),
-            self.camera_pitch.sin(),
-            self.camera_yaw.sin() * self.camera_pitch.cos(),
-          );
-          self.camera_front = direction.normalize();
-        }
-
-        // Update last cursor position
-        self.last_cursor_position = position;
-      }
       WindowEvent::MouseInput {
         state,
         button,
         ..
       } => {
-        if button == MouseButton::Left && pass_events_to_game {
-          self.cursor_captured = state == ElementState::Pressed;
+        if button == MouseButton::Left && pass_events_to_game && state == ElementState::Pressed {
+          self.cursor_captured = true;
+          rcx
+            .window
+            .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+            .unwrap();
+          rcx.window.set_cursor_visible(false);
         }
       }
+      WindowEvent::CursorMoved { .. } => {}
+      WindowEvent::MouseWheel { .. } => {}
       WindowEvent::RedrawRequested => {
         let now = Instant::now();
         let frame_time = now.duration_since(self.last_frame_time).as_secs_f64();
@@ -1100,6 +1085,38 @@ impl ApplicationHandler for App {
         }
       }
       _ => {}
+    }
+  }
+
+  fn device_event(
+    &mut self,
+    _event_loop: &ActiveEventLoop,
+    _device_id: DeviceId,
+    event: DeviceEvent,
+  ) {
+    if let DeviceEvent::MouseMotion { delta } = event {
+      if self.cursor_captured {
+        let sensitivity = 0.005;
+        let (delta_x, delta_y) = delta;
+
+        self.camera_yaw -= delta_x * sensitivity; // Inverted horizontal movement
+                                                  // Clamp yaw to keep it within -2π to 2π range
+        self.camera_yaw %= 2.0 * std::f64::consts::PI;
+
+        self.camera_pitch -= delta_y * sensitivity;
+        // Clamp the pitch to prevent flipping
+        self.camera_pitch = self
+          .camera_pitch
+          .clamp(-89.0f64.to_radians(), 89.0f64.to_radians());
+
+        // Update the camera's direction
+        let direction = DVec3::new(
+          self.camera_yaw.cos() * self.camera_pitch.cos(),
+          self.camera_pitch.sin(),
+          self.camera_yaw.sin() * self.camera_pitch.cos(),
+        );
+        self.camera_front = direction.normalize();
+      }
     }
   }
 
