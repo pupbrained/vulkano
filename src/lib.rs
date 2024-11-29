@@ -11,6 +11,8 @@
 pub mod app;
 /// Camera management and transformation matrices
 pub mod camera;
+/// Vulkan initialization and device setup
+pub mod init;
 /// 3D model loading and GPU buffer management
 pub mod model;
 /// Vulkan rendering pipeline and setup
@@ -23,6 +25,7 @@ pub mod vertex;
 // Re-export commonly used items
 pub use app::App;
 pub use camera::Camera;
+pub use init::{initialize_vulkan, InitializedVulkan};
 pub use model::{load_viking_room_model, VikingRoomModelBuffers};
 pub use render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig};
 pub use shaders::{fs, vs};

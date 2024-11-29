@@ -9,58 +9,34 @@
 
 use std::{
   sync::Arc,
-  time::{Duration, Instant},
+  time::Instant,
 };
 
 use egui_winit_vulkano::{Gui, GuiConfig};
 use glam::{DMat3, DMat4, DVec3, Mat4};
 use vulkano::{
-  buffer::{
-    allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo},
-    Buffer,
-    BufferCreateInfo,
-    BufferUsage,
-  },
+  buffer::allocator::SubbufferAllocator,
   command_buffer::{
     allocator::StandardCommandBufferAllocator,
     AutoCommandBufferBuilder,
     CommandBufferUsage,
-    CopyBufferToImageInfo,
-    PrimaryCommandBufferAbstract,
     RenderPassBeginInfo,
     SubpassBeginInfo,
     SubpassContents,
     SubpassEndInfo,
   },
   descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet, WriteDescriptorSet},
-  device::{
-    physical::PhysicalDeviceType,
-    Device,
-    DeviceCreateInfo,
-    DeviceExtensions,
-    DeviceFeatures,
-    Queue,
-    QueueCreateInfo,
-    QueueFlags,
-  },
+  device::{Device, Queue},
   format::Format,
-  image::{
-    sampler::{Sampler, SamplerCreateInfo},
-    view::ImageView,
-    Image,
-    ImageCreateInfo,
-    ImageType,
-    ImageUsage,
-  },
-  instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
-  memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
+  image::{sampler::Sampler, view::ImageView, ImageUsage},
+  instance::Instance,
+  memory::allocator::StandardMemoryAllocator,
   pipeline::{Pipeline, PipelineBindPoint},
   render_pass::Subpass,
   swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
   sync::{self, GpuFuture},
   Validated,
   VulkanError,
-  VulkanLibrary,
 };
 use winit::{
   application::ApplicationHandler,
@@ -71,7 +47,8 @@ use winit::{
 };
 
 use crate::{
-  model::{load_viking_room_model, VikingRoomModelBuffers},
+  init::initialize_vulkan,
+  model::VikingRoomModelBuffers,
   render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
   shaders::{fs, vs},
 };
@@ -114,8 +91,7 @@ pub struct App {
   line_width: f32,
   max_line_width: f32,
   needs_pipeline_update: bool,
-  last_line_width_update: Instant,
-  line_width_update_interval: Duration,
+  supports_wide_lines: bool,
   cursor_captured: bool,
   fov: f32, // Field of view in degrees
 }
@@ -133,193 +109,19 @@ impl App {
   /// # Parameters
   /// * `event_loop` - The winit event loop to create the window for
   pub fn new(event_loop: &EventLoop<()>) -> Self {
-    let library = VulkanLibrary::new().unwrap();
-    let required_extensions = Surface::required_extensions(event_loop).unwrap();
-    let instance = Instance::new(
-      library,
-      InstanceCreateInfo {
-        flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
-        enabled_extensions: required_extensions,
-        ..Default::default()
-      },
-    )
-    .unwrap();
-
-    let device_extensions = DeviceExtensions {
-      khr_swapchain: true,
-      ..DeviceExtensions::empty()
-    };
-
-    let (physical_device, queue_family_index) = instance
-      .enumerate_physical_devices()
-      .unwrap()
-      .filter(|p| p.supported_extensions().contains(&device_extensions))
-      .filter_map(|p| {
-        p.queue_family_properties()
-          .iter()
-          .enumerate()
-          .position(|(i, q)| {
-            q.queue_flags.intersects(QueueFlags::GRAPHICS)
-              && p.presentation_support(i as u32, event_loop).unwrap()
-          })
-          .map(|i| (p, i as u32))
-      })
-      .min_by_key(|(p, _)| match p.properties().device_type {
-        PhysicalDeviceType::DiscreteGpu => 0,
-        PhysicalDeviceType::IntegratedGpu => 1,
-        PhysicalDeviceType::VirtualGpu => 2,
-        PhysicalDeviceType::Cpu => 3,
-        PhysicalDeviceType::Other => 4,
-        _ => 5,
-      })
-      .unwrap();
-
-    println!(
-      "Using device: {} (type: {:?})",
-      physical_device.properties().device_name,
-      physical_device.properties().device_type,
-    );
-
-    let (device, mut queues) = Device::new(
-      physical_device.clone(),
-      DeviceCreateInfo {
-        enabled_extensions: device_extensions,
-        enabled_features: DeviceFeatures {
-          fill_mode_non_solid: true, // Enable wireframe mode
-          wide_lines: true,          // Enable adjustable line width
-          #[cfg(target_os = "macos")]
-          image_view_format_swizzle: true, // Enable image view
-          #[cfg(not(target_os = "macos"))]
-          image_view_format_swizzle: false,
-          ..DeviceFeatures::empty()
-        },
-        queue_create_infos: vec![QueueCreateInfo {
-          queue_family_index,
-          ..Default::default()
-        }],
-        ..Default::default()
-      },
-    )
-    .unwrap();
-
-    let supports_wide_lines = physical_device.supported_features().wide_lines;
-
-    // Query maximum line width
-    let max_line_width = if supports_wide_lines {
-      let properties = physical_device.properties();
-      properties.line_width_range[1]
-    } else {
-      1.0
-    };
-
-    println!("Wide lines support: {}", supports_wide_lines);
-    println!("Maximum line width: {:.1}", max_line_width);
-
-    let queue = queues.next().unwrap();
-
-    let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
-    let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
-      device.clone(),
-      Default::default(),
-    ));
-    let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
-      device.clone(),
-      Default::default(),
-    ));
-
-    let model_buffers = load_viking_room_model(memory_allocator.clone());
-
-    let uniform_buffer_allocator = SubbufferAllocator::new(
-      memory_allocator.clone(),
-      SubbufferAllocatorCreateInfo {
-        buffer_usage: BufferUsage::UNIFORM_BUFFER,
-        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-          | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-        ..Default::default()
-      },
-    );
-
-    // Load the texture
-    let texture_path = std::path::Path::new("textures/viking_room.png");
-    let texture_data = image::open(texture_path).unwrap().to_rgba8();
-    let dimensions = texture_data.dimensions();
-
-    let image = Image::new(
-      memory_allocator.clone(),
-      ImageCreateInfo {
-        image_type: ImageType::Dim2d,
-        format: Format::R8G8B8A8_SRGB,
-        extent: [dimensions.0, dimensions.1, 1],
-        usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
-        ..Default::default()
-      },
-      AllocationCreateInfo {
-        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-        ..Default::default()
-      },
-    )
-    .unwrap();
-
-    let texture = ImageView::new_default(image.clone()).unwrap();
-
-    // Create staging buffer
-    let staging_buffer = Buffer::from_iter(
-      memory_allocator.clone(),
-      BufferCreateInfo {
-        usage: BufferUsage::TRANSFER_SRC,
-        ..Default::default()
-      },
-      AllocationCreateInfo {
-        memory_type_filter: MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-        ..Default::default()
-      },
-      texture_data.into_raw(),
-    )
-    .unwrap();
-
-    // Create command buffer for texture upload
-    let mut texture_upload = AutoCommandBufferBuilder::primary(
-      command_buffer_allocator.clone(),
-      queue.queue_family_index(),
-      CommandBufferUsage::OneTimeSubmit,
-    )
-    .unwrap();
-
-    texture_upload
-      .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(staging_buffer, image))
-      .unwrap();
-
-    let texture_upload = texture_upload.build().unwrap();
-    texture_upload
-      .execute(queue.clone())
-      .unwrap()
-      .then_signal_fence_and_flush()
-      .unwrap()
-      .wait(None)
-      .unwrap();
-
-    let sampler = Sampler::new(
-      device.clone(),
-      SamplerCreateInfo {
-        mag_filter: vulkano::image::sampler::Filter::Linear,
-        min_filter: vulkano::image::sampler::Filter::Linear,
-        address_mode: [vulkano::image::sampler::SamplerAddressMode::Repeat; 3],
-        ..Default::default()
-      },
-    )
-    .unwrap();
-
+    let initialized = initialize_vulkan(event_loop);
+    
     App {
-      instance,
-      device,
-      queue,
-      memory_allocator,
-      descriptor_set_allocator,
-      command_buffer_allocator,
-      model_buffers,
-      uniform_buffer_allocator,
-      texture,
-      sampler,
+      instance: initialized.instance,
+      device: initialized.device,
+      queue: initialized.queue,
+      memory_allocator: initialized.memory_allocator,
+      descriptor_set_allocator: initialized.descriptor_set_allocator,
+      command_buffer_allocator: initialized.command_buffer_allocator,
+      model_buffers: initialized.model_buffers,
+      uniform_buffer_allocator: initialized.uniform_buffer_allocator,
+      texture: initialized.texture,
+      sampler: initialized.sampler,
       rcx: None,
       gui: None,
       last_frame_time: Instant::now(),
@@ -342,10 +144,9 @@ impl App {
       // Rendering settings
       wireframe_mode: false,
       line_width: 1.0,
-      max_line_width,
+      max_line_width: initialized.max_line_width,
       needs_pipeline_update: false,
-      last_line_width_update: Instant::now(),
-      line_width_update_interval: Duration::from_millis(100),
+      supports_wide_lines: initialized.supports_wide_lines,
       cursor_captured: false,
       fov: 90.0, // Default 90 degree FOV
     }
@@ -882,28 +683,15 @@ impl ApplicationHandler for App {
                 }
 
                 if self.wireframe_mode {
-                  ui.horizontal(|ui| {
-                    ui.label("Line Width:");
-                    let device = self.device.physical_device();
-                    let supports_wide_lines = device.supported_features().wide_lines;
-
-                    if supports_wide_lines {
-                      let mut width = self.line_width;
-                      if ui
-                        .add(egui::Slider::new(&mut width, 1.0..=self.max_line_width).step_by(0.1))
-                        .changed()
-                        && now.duration_since(self.last_line_width_update)
-                          > self.line_width_update_interval
-                      {
-                        self.line_width = width;
-                        self.needs_pipeline_update = true;
-                        self.last_line_width_update = now;
-                      }
-                    } else {
-                      ui.label("1.0 (Wide lines not supported)");
-                      self.line_width = 1.0;
+                  if self.supports_wide_lines {
+                    let mut line_width = self.line_width;
+                    if ui.add(egui::Slider::new(&mut line_width, 1.0..=self.max_line_width).text("Line Width")).changed() {
+                      self.line_width = line_width;
+                      self.needs_pipeline_update = true;
                     }
-                  });
+                  } else {
+                    ui.label("Wide lines not supported on this device");
+                  }
                 }
 
                 // Add FOV slider
