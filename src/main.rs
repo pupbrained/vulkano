@@ -225,6 +225,7 @@ struct App {
   last_line_width_update: Instant,
   line_width_update_interval: Duration,
   cursor_captured: bool,
+  fov: f32, // Field of view in degrees
 }
 
 struct RenderContext {
@@ -456,6 +457,7 @@ impl App {
       last_line_width_update: Instant::now(),
       line_width_update_interval: Duration::from_millis(100),
       cursor_captured: false,
+      fov: 90.0, // Default 90 degree FOV
     }
   }
 
@@ -747,7 +749,22 @@ impl ApplicationHandler for App {
         }
       }
       WindowEvent::CursorMoved { .. } => {}
-      WindowEvent::MouseWheel { .. } => {}
+      WindowEvent::MouseWheel { delta, .. } => {
+        if self.cursor_captured {
+          match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => {
+              // Adjust FOV by 5 degrees per scroll line, inverted direction
+              self.fov = (self.fov - y * 5.0).clamp(30.0, 120.0);
+              self.needs_pipeline_update = true;
+            }
+            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+              // Adjust FOV by 5 degrees per 50 pixels, inverted direction
+              self.fov = (self.fov - (pos.y as f32 / 50.0) * 5.0).clamp(30.0, 120.0);
+              self.needs_pipeline_update = true;
+            }
+          }
+        }
+      }
       WindowEvent::RedrawRequested => {
         let now = Instant::now();
         let frame_time = now.duration_since(self.last_frame_time).as_secs_f64();
@@ -800,7 +817,7 @@ impl ApplicationHandler for App {
           let aspect_ratio =
             rcx.swapchain.image_extent()[0] as f32 / rcx.swapchain.image_extent()[1] as f32;
 
-          let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, aspect_ratio, 0.01, 100.0);
+          let proj = Mat4::perspective_rh(self.fov.to_radians(), aspect_ratio, 0.01, 100.0);
 
           // Update view matrix based on camera position
           let view = DMat4::look_at_rh(
@@ -955,6 +972,17 @@ impl ApplicationHandler for App {
                     }
                   });
                 }
+
+                // Add FOV slider
+                ui.horizontal(|ui| {
+                  ui.label("Field of View:");
+                  if ui
+                    .add(egui::Slider::new(&mut self.fov, 30.0..=120.0).step_by(1.0))
+                    .changed()
+                  {
+                    self.needs_pipeline_update = true;
+                  }
+                });
 
                 ui.separator();
 
