@@ -7,10 +7,7 @@
 //! * Render loop coordination
 //! * Camera and input handling
 
-use std::{
-  sync::Arc,
-  time::Instant,
-};
+use std::{sync::Arc, time::Instant};
 
 use egui_winit_vulkano::{Gui, GuiConfig};
 use glam::{DMat3, DMat4, DVec3, Mat4};
@@ -27,13 +24,13 @@ use vulkano::{
   image::{sampler::Sampler, view::ImageView, ImageUsage},
   instance::Instance,
   memory::allocator::StandardMemoryAllocator,
+  pipeline::Pipeline,
   render_pass::Subpass,
   swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
   sync::{self, GpuFuture},
   Validated,
   VulkanError,
 };
-use vulkano::pipeline::Pipeline;
 use winit::{
   application::ApplicationHandler,
   dpi::{LogicalPosition, LogicalSize},
@@ -43,10 +40,11 @@ use winit::{
 };
 
 use crate::{
-  command_buffer_builder_ext::AutoCommandBufferBuilderExt,
-  init::initialize_vulkan,
-  model::VikingRoomModelBuffers,
-  render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
+  core::{command_buffer_builder_ext::AutoCommandBufferBuilderExt, init::initialize_vulkan},
+  render::{
+    model::VikingRoomModelBuffers,
+    render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
+  },
   shaders::{fs, vs},
 };
 
@@ -58,51 +56,51 @@ use crate::{
 /// * Rendering pipeline configuration
 /// * Performance monitoring
 pub struct App {
-    // Vulkan core resources
-    instance: Arc<Instance>,
-    device: Arc<Device>,
-    queue: Arc<Queue>,
+  // Vulkan core resources
+  instance: Arc<Instance>,
+  device: Arc<Device>,
+  queue: Arc<Queue>,
 
-    // Memory and resource allocators
-    memory_allocator: Arc<StandardMemoryAllocator>,
-    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-    uniform_buffer_allocator: SubbufferAllocator,
+  // Memory and resource allocators
+  memory_allocator: Arc<StandardMemoryAllocator>,
+  descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+  command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+  uniform_buffer_allocator: SubbufferAllocator,
 
-    // 3D model and texture resources
-    model_buffers: VikingRoomModelBuffers,
-    texture: Arc<ImageView>,
-    sampler: Arc<Sampler>,
+  // 3D model and texture resources
+  model_buffers: VikingRoomModelBuffers,
+  texture: Arc<ImageView>,
+  sampler: Arc<Sampler>,
 
-    // Rendering context and UI
-    rcx: Option<RenderContext>,
-    gui: Option<Gui>,
+  // Rendering context and UI
+  rcx: Option<RenderContext>,
+  gui: Option<Gui>,
 
-    // Performance monitoring
-    last_frame_time: Instant,
-    fps: f32,
+  // Performance monitoring
+  last_frame_time: Instant,
+  fps: f32,
 
-    // Camera position and orientation
-    camera_pos: DVec3,
-    camera_yaw: f64,
-    camera_pitch: f64,
-    camera_front: DVec3,
+  // Camera position and orientation
+  camera_pos: DVec3,
+  camera_yaw: f64,
+  camera_pitch: f64,
+  camera_front: DVec3,
 
-    // Camera movement parameters
-    camera_velocity: DVec3,
-    movement_acceleration: f64,
-    movement_deceleration: f64,
-    max_speed: f64,
-    movement_input: DVec3,
+  // Camera movement parameters
+  camera_velocity: DVec3,
+  movement_acceleration: f64,
+  movement_deceleration: f64,
+  max_speed: f64,
+  movement_input: DVec3,
 
-    // Rendering settings
-    wireframe_mode: bool,
-    line_width: f32,
-    max_line_width: f32,
-    needs_pipeline_update: bool,
-    supports_wide_lines: bool,
-    cursor_captured: bool,
-    fov: f32, // Field of view in degrees
+  // Rendering settings
+  wireframe_mode: bool,
+  line_width: f32,
+  max_line_width: f32,
+  needs_pipeline_update: bool,
+  supports_wide_lines: bool,
+  cursor_captured: bool,
+  fov: f32, // Field of view in degrees
 }
 
 impl App {
@@ -119,7 +117,7 @@ impl App {
   /// * `event_loop` - The winit event loop to create the window for
   pub fn new(event_loop: &EventLoop<()>) -> Self {
     let initialized = initialize_vulkan(event_loop);
-    
+
     App {
       instance: initialized.instance,
       device: initialized.device,
@@ -246,6 +244,25 @@ impl ApplicationHandler for App {
         surface_capabilities.supported_composite_alpha
       );
 
+      // Query supported present modes
+      let present_modes = self
+        .device
+        .physical_device()
+        .surface_present_modes(&surface, Default::default())
+        .unwrap();
+
+      // Try to use IMMEDIATE if supported, fall back to MAILBOX (triple buffering) if not, then FIFO (vsync)
+      let present_mode = if present_modes.contains(&vulkano::swapchain::PresentMode::Immediate) {
+        println!("Using IMMEDIATE present mode (vsync off)");
+        vulkano::swapchain::PresentMode::Immediate
+      } else if present_modes.contains(&vulkano::swapchain::PresentMode::Mailbox) {
+        println!("Using MAILBOX present mode (triple buffering)");
+        vulkano::swapchain::PresentMode::Mailbox
+      } else {
+        println!("Using FIFO present mode (vsync on)");
+        vulkano::swapchain::PresentMode::Fifo
+      };
+
       let (image_format, _) = self
         .device
         .physical_device()
@@ -281,6 +298,7 @@ impl ApplicationHandler for App {
           composite_alpha: vulkano::swapchain::CompositeAlpha::Opaque,
           pre_transform: surface_capabilities.current_transform,
           clipped: true,
+          present_mode,
           ..Default::default()
         },
       )
@@ -694,7 +712,13 @@ impl ApplicationHandler for App {
                 if self.wireframe_mode {
                   if self.supports_wide_lines {
                     let mut line_width = self.line_width;
-                    if ui.add(egui::Slider::new(&mut line_width, 1.0..=self.max_line_width).text("Line Width")).changed() {
+                    if ui
+                      .add(
+                        egui::Slider::new(&mut line_width, 1.0..=self.max_line_width)
+                          .text("Line Width"),
+                      )
+                      .changed()
+                    {
                       self.line_width = line_width;
                       self.needs_pipeline_update = true;
                     }
@@ -751,7 +775,7 @@ impl ApplicationHandler for App {
           &descriptor_set,
           image_index,
           &self.model_buffers,
-          &mut self.gui
+          &mut self.gui,
         );
 
         // Build and execute the command buffer
@@ -771,8 +795,6 @@ impl ApplicationHandler for App {
 
         match final_future.map_err(Validated::unwrap) {
           Ok(future) => {
-            // Wait for the GPU to finish the previous frame before starting the next one
-            future.wait(None).unwrap();
             rcx.previous_frame_end = Some(future.boxed());
           }
           Err(VulkanError::OutOfDate) => {

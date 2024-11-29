@@ -26,6 +26,10 @@
             then pkgs.stdenvAdapters.useMoldLinker pkgs.llvmPackages_18.libcxxStdenv
             else pkgs.llvmPackages_18.libcxxStdenv;
 
+          rust = pkgs.rust-bin.nightly.latest.default.override {
+            extensions = ["rust-analyzer" "rust-src"];
+          };
+
           deps = with pkgs; [
             libxkbcommon
             vulkan-extension-layer
@@ -34,6 +38,7 @@
             vulkan-loader
             vulkan-tools
             wayland
+            valgrind
           ];
         in
           with pkgs; {
@@ -42,10 +47,8 @@
               programs = {
                 alejandra.enable = true;
 
-                clang-format = {
-                  enable = true;
-                  package = pkgs.llvmPackages_18.clang-tools;
-                };
+                rustfmt.enable = true;
+                rustfmt.package = rust;
               };
             };
 
@@ -53,9 +56,8 @@
               buildInputs =
                 [
                   alejandra
-                  (rust-bin.nightly.latest.default.override {
-                    extensions = ["rust-analyzer" "rust-src"];
-                  })
+                  linuxKernel.packages.linux_xanmod.perf.out
+                  rust
                 ]
                 ++ deps;
 

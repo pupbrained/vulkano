@@ -7,29 +7,33 @@
 //! * Camera controls
 //! * Vertex attribute handling
 
-/// Core application functionality and initialization
+// Core Vulkan functionality
+pub mod core {
+  pub mod command_buffer_builder_ext;
+  pub mod init;
+}
+
+// Rendering components
+pub mod render {
+  pub mod camera;
+  pub mod model;
+  pub mod render;
+  pub mod vertex;
+}
+
+/// Core application functionality
 pub mod app;
-/// Camera management and transformation matrices
-pub mod camera;
-/// Vulkan initialization and device setup
-pub mod init;
-/// 3D model loading and GPU buffer management
-pub mod model;
-/// Vulkan rendering pipeline and setup
-pub mod render;
 /// GLSL shader management
 pub mod shaders;
-/// Vertex attribute definitions and format specifications
-pub mod vertex;
-
-// command buffer builder functions
-pub mod command_buffer_builder_ext;
 
 // Re-export commonly used items
+pub use core::init::{initialize_vulkan, InitializedVulkan};
+
 pub use app::App;
-pub use camera::Camera;
-pub use init::{initialize_vulkan, InitializedVulkan};
-pub use model::{load_viking_room_model, VikingRoomModelBuffers};
-pub use render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig};
+pub use render::{
+  camera::Camera,
+  model::{load_viking_room_model, VikingRoomModelBuffers},
+  render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
+  vertex::{Normal, Position, TexCoord},
+};
 pub use shaders::{fs, vs};
-pub use vertex::{Normal, Position, TexCoord};

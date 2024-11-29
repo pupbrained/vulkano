@@ -9,8 +9,8 @@
 /// The shader handles vertex transformations and attribute passing.
 pub mod vs {
   vulkano_shaders::shader! {
-      ty: "vertex",
-      path: "src/vert.glsl",
+    ty: "vertex",
+    path: "src/shaders/vert.glsl",
   }
 }
 
@@ -20,7 +20,7 @@ pub mod vs {
 /// The shader handles texture sampling and final color output.
 pub mod fs {
   vulkano_shaders::shader! {
-      ty: "fragment",
-      path: "src/frag.glsl",
+    ty: "fragment",
+    path: "src/shaders/frag.glsl",
   }
 }

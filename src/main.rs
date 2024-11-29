@@ -1,8 +1,7 @@
 use std::error::Error;
 
-use winit::event_loop::EventLoop;
-
 use vulkano_app::App;
+use winit::event_loop::EventLoop;
 
 fn main() -> Result<(), Box<dyn Error>> {
   let event_loop = EventLoop::new()?;

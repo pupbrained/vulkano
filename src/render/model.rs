@@ -43,7 +43,7 @@ pub fn load_viking_room_model(
 ) -> VikingRoomModelBuffers {
   let (positions, normals, tex_coords, indices) = {
     let model = tobj::load_obj(
-      "models/viking_room.obj",
+      "src/models/viking_room.obj",
       &tobj::LoadOptions {
         triangulate: true,
         ..Default::default()
