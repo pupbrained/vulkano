@@ -50,7 +50,7 @@ use vulkano::{
 
 use winit::{
   application::ApplicationHandler,
-  dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
+  dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
   event::{ElementState, MouseButton, WindowEvent},
   event_loop::{ActiveEventLoop, EventLoop},
   window::{Window, WindowId},
@@ -219,7 +219,6 @@ struct App {
   camera_pos: DVec3,
   camera_yaw: f64,
   camera_pitch: f64,
-  camera_roll: f64,
   camera_front: DVec3,
   // Smooth movement
   camera_velocity: DVec3,
@@ -448,9 +447,12 @@ impl App {
       camera_pos: DVec3::new(-1.1, 0.1, 1.0),
       camera_yaw: -std::f64::consts::FRAC_PI_4,
       camera_pitch: 0.0,
-      camera_roll: 0.0,
-      camera_front: DVec3::new(0.0, 0.0, 1.0),
-      // Smooth movement
+      camera_front: DVec3::new(
+        (-std::f64::consts::FRAC_PI_4).cos() * 0.0f64.cos(),
+        0.0f64.sin(),
+        (-std::f64::consts::FRAC_PI_4).sin() * 0.0f64.cos(),
+      )
+      .normalize(),
       camera_velocity: DVec3::ZERO,
       movement_acceleration: 20.0,
       movement_deceleration: 10.0,
@@ -515,7 +517,11 @@ impl ApplicationHandler for App {
             .with_decorations(true)
             .with_transparent(true)
             .with_title("Vulkano App")
-            .with_inner_size(LogicalSize::new(800, 600)),
+            .with_inner_size(LogicalSize::new(1280, 720))
+            .with_position(LogicalPosition::new(
+              (event_loop.primary_monitor().unwrap().size().width as i32 - 1280) / 2,
+              (event_loop.primary_monitor().unwrap().size().height as i32 - 720) / 2,
+            )),
         )
         .unwrap(),
     );
@@ -754,6 +760,8 @@ impl ApplicationHandler for App {
           let delta_y = position.y - self.last_cursor_position.y; // Correct Y-axis movement
 
           self.camera_yaw += delta_x * sensitivity;
+          // Clamp yaw to keep it within -2π to 2π range
+          self.camera_yaw %= 2.0 * std::f64::consts::PI;
           self.camera_pitch -= delta_y * sensitivity;
 
           // Clamp the pitch to prevent flipping
@@ -911,7 +919,6 @@ impl ApplicationHandler for App {
                 ui.label(format!("Z: {:.2}", self.camera_pos.z));
                 ui.label(format!("Yaw: {:.1}°", self.camera_yaw.to_degrees()));
                 ui.label(format!("Pitch: {:.1}°", self.camera_pitch.to_degrees()));
-                ui.label(format!("Roll: {:.1}°", self.camera_roll.to_degrees()));
 
                 ui.separator();
 
@@ -1096,18 +1103,17 @@ impl ApplicationHandler for App {
           .unwrap()
           .join(acquire_future)
           .then_execute(self.queue.clone(), command_buffer)
-          .unwrap();
-
-        // Present the final image
-        let future = final_future
+          .unwrap()
           .then_swapchain_present(
             self.queue.clone(),
             SwapchainPresentInfo::swapchain_image_index(rcx.swapchain.clone(), image_index),
           )
           .then_signal_fence_and_flush();
 
-        match future.map_err(Validated::unwrap) {
+        match final_future.map_err(Validated::unwrap) {
           Ok(future) => {
+            // Wait for the GPU to finish the previous frame before starting the next one
+            future.wait(None).unwrap();
             rcx.previous_frame_end = Some(future.boxed());
           }
           Err(VulkanError::OutOfDate) => {
@@ -1115,7 +1121,7 @@ impl ApplicationHandler for App {
             rcx.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
           }
           Err(e) => {
-            println!("failed to flush future: {e}");
+            println!("Failed to flush future: {e}");
             rcx.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
           }
         }
