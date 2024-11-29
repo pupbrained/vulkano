@@ -55,45 +55,57 @@ use crate::{
 
 /// Main application state containing all Vulkan and window resources.
 ///
-/// This struct is responsible for:
-/// * Managing the Vulkan instance, device, and queues
-/// * Coordinating rendering operations
-/// * Handling window events and user input
-/// * Managing the camera and scene state
+/// This struct manages the complete state of the Vulkan application, including:
+/// * Vulkan instance, device, and resource management
+/// * Camera and movement controls
+/// * Rendering pipeline configuration
+/// * Performance monitoring
 pub struct App {
-  instance: Arc<Instance>,
-  device: Arc<Device>,
-  queue: Arc<Queue>,
-  memory_allocator: Arc<StandardMemoryAllocator>,
-  descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-  command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-  model_buffers: VikingRoomModelBuffers,
-  uniform_buffer_allocator: SubbufferAllocator,
-  texture: Arc<ImageView>,
-  sampler: Arc<Sampler>,
-  rcx: Option<RenderContext>,
-  gui: Option<Gui>,
-  last_frame_time: Instant,
-  fps: f32,
-  // Camera state
-  camera_pos: DVec3,
-  camera_yaw: f64,
-  camera_pitch: f64,
-  camera_front: DVec3,
-  // Smooth movement
-  camera_velocity: DVec3,
-  movement_acceleration: f64,
-  movement_deceleration: f64,
-  max_speed: f64,
-  movement_input: DVec3,
-  // Rendering settings
-  wireframe_mode: bool,
-  line_width: f32,
-  max_line_width: f32,
-  needs_pipeline_update: bool,
-  supports_wide_lines: bool,
-  cursor_captured: bool,
-  fov: f32, // Field of view in degrees
+    // Vulkan core resources
+    instance: Arc<Instance>,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
+
+    // Memory and resource allocators
+    memory_allocator: Arc<StandardMemoryAllocator>,
+    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    uniform_buffer_allocator: SubbufferAllocator,
+
+    // 3D model and texture resources
+    model_buffers: VikingRoomModelBuffers,
+    texture: Arc<ImageView>,
+    sampler: Arc<Sampler>,
+
+    // Rendering context and UI
+    rcx: Option<RenderContext>,
+    gui: Option<Gui>,
+
+    // Performance monitoring
+    last_frame_time: Instant,
+    fps: f32,
+
+    // Camera position and orientation
+    camera_pos: DVec3,
+    camera_yaw: f64,
+    camera_pitch: f64,
+    camera_front: DVec3,
+
+    // Camera movement parameters
+    camera_velocity: DVec3,
+    movement_acceleration: f64,
+    movement_deceleration: f64,
+    max_speed: f64,
+    movement_input: DVec3,
+
+    // Rendering settings
+    wireframe_mode: bool,
+    line_width: f32,
+    max_line_width: f32,
+    needs_pipeline_update: bool,
+    supports_wide_lines: bool,
+    cursor_captured: bool,
+    fov: f32, // Field of view in degrees
 }
 
 impl App {
