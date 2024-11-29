@@ -3,13 +3,6 @@ name = "vulkano-app"
 version = "0.1.0"
 edition = "2021"
 
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Dwm",
-    "Win32_UI_WindowsAndMessaging",
-] }
-
 [dependencies]
 glam = "0.29"
 egui-winit = { version = "0.29", default-features = false }

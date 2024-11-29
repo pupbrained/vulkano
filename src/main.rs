@@ -56,15 +56,6 @@ use winit::{
   window::{Window, WindowId},
 };
 
-#[cfg(target_os = "windows")]
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-#[cfg(target_os = "windows")]
-use windows::{
-  Win32::Foundation::HWND,
-  Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE},
-};
-
 #[derive(BufferContents, Vertex)]
 #[repr(C)]
 struct Position {
@@ -515,7 +506,6 @@ impl ApplicationHandler for App {
         .create_window(
           Window::default_attributes()
             .with_decorations(true)
-            .with_transparent(true)
             .with_title("Vulkano App")
             .with_inner_size(LogicalSize::new(1280, 720))
             .with_position(LogicalPosition::new(
@@ -525,24 +515,6 @@ impl ApplicationHandler for App {
         )
         .unwrap(),
     );
-
-    #[cfg(target_os = "windows")]
-    {
-      // Apply Mica effect (Windows 11 only)
-      if let Ok(handle) = window.window_handle() {
-        if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-          unsafe {
-            DwmSetWindowAttribute(
-              HWND(handle.hwnd.get() as *mut _),
-              DWMWA_SYSTEMBACKDROP_TYPE,
-              &DWMSBT_MAINWINDOW as *const _ as *const _,
-              std::mem::size_of::<i32>() as u32,
-            )
-            .ok();
-          }
-        }
-      }
-    }
 
     let surface = Surface::from_window(self.instance.clone(), window.clone()).unwrap();
     let window_size = window.inner_size();
