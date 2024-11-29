@@ -666,8 +666,9 @@ impl ApplicationHandler for App {
     _window_id: WindowId,
     event: WindowEvent,
   ) {
+    let mut pass_events_to_game = true;
     if let Some(gui) = &mut self.gui {
-      let _pass_events_to_game = !gui.update(&event);
+      pass_events_to_game = !gui.update(&event);
     }
 
     let rcx = self.rcx.as_mut().unwrap();
@@ -726,7 +727,7 @@ impl ApplicationHandler for App {
       WindowEvent::CursorMoved {
         position, ..
       } => {
-        if self.cursor_captured {
+        if self.cursor_captured && pass_events_to_game {
           let sensitivity = 0.005; // Adjust sensitivity to a lower value
           let delta_x = self.last_cursor_position.x - position.x; // Invert X-axis movement
           let delta_y = position.y - self.last_cursor_position.y; // Correct Y-axis movement
@@ -758,7 +759,7 @@ impl ApplicationHandler for App {
         button,
         ..
       } => {
-        if button == MouseButton::Left {
+        if button == MouseButton::Left && pass_events_to_game {
           self.cursor_captured = state == ElementState::Pressed;
         }
       }
