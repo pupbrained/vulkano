@@ -53,7 +53,7 @@
               buildInputs =
                 [
                   alejandra
-                  (rust-bin.stable.latest.default.override {
+                  (rust-bin.nightly.latest.default.override {
                     extensions = ["rust-analyzer" "rust-src"];
                   })
                 ]

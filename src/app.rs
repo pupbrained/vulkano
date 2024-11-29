@@ -17,23 +17,40 @@ use glam::{DMat3, DMat4, DVec3, Mat4};
 use vulkano::{
   buffer::{
     allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo},
-    Buffer, BufferCreateInfo, BufferUsage,
+    Buffer,
+    BufferCreateInfo,
+    BufferUsage,
   },
   command_buffer::{
-    allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-    CopyBufferToImageInfo, PrimaryCommandBufferAbstract, RenderPassBeginInfo, SubpassBeginInfo,
-    SubpassContents, SubpassEndInfo,
+    allocator::StandardCommandBufferAllocator,
+    AutoCommandBufferBuilder,
+    CommandBufferUsage,
+    CopyBufferToImageInfo,
+    PrimaryCommandBufferAbstract,
+    RenderPassBeginInfo,
+    SubpassBeginInfo,
+    SubpassContents,
+    SubpassEndInfo,
   },
   descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet, WriteDescriptorSet},
   device::{
-    physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures,
-    Queue, QueueCreateInfo, QueueFlags,
+    physical::PhysicalDeviceType,
+    Device,
+    DeviceCreateInfo,
+    DeviceExtensions,
+    DeviceFeatures,
+    Queue,
+    QueueCreateInfo,
+    QueueFlags,
   },
   format::Format,
   image::{
     sampler::{Sampler, SamplerCreateInfo},
     view::ImageView,
-    Image, ImageCreateInfo, ImageType, ImageUsage,
+    Image,
+    ImageCreateInfo,
+    ImageType,
+    ImageUsage,
   },
   instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
   memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
@@ -41,7 +58,9 @@ use vulkano::{
   render_pass::Subpass,
   swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
   sync::{self, GpuFuture},
-  Validated, VulkanError, VulkanLibrary,
+  Validated,
+  VulkanError,
+  VulkanLibrary,
 };
 use winit::{
   application::ApplicationHandler,
@@ -649,8 +668,13 @@ impl ApplicationHandler for App {
         if button == MouseButton::Left && pass_events_to_game && state == ElementState::Pressed {
           self.cursor_captured = true;
           // Try Locked mode first, fall back to Confined if not supported
-          if rcx.window.set_cursor_grab(winit::window::CursorGrabMode::Locked).is_err() {
-            rcx.window
+          if rcx
+            .window
+            .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+            .is_err()
+          {
+            rcx
+              .window
               .set_cursor_grab(winit::window::CursorGrabMode::Confined)
               .unwrap();
           }
