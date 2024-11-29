@@ -20,10 +20,6 @@ use vulkano::{
     allocator::StandardCommandBufferAllocator,
     AutoCommandBufferBuilder,
     CommandBufferUsage,
-    RenderPassBeginInfo,
-    SubpassBeginInfo,
-    SubpassContents,
-    SubpassEndInfo,
   },
   descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet, WriteDescriptorSet},
   device::{Device, Queue},
@@ -31,13 +27,13 @@ use vulkano::{
   image::{sampler::Sampler, view::ImageView, ImageUsage},
   instance::Instance,
   memory::allocator::StandardMemoryAllocator,
-  pipeline::{Pipeline, PipelineBindPoint},
   render_pass::Subpass,
   swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
   sync::{self, GpuFuture},
   Validated,
   VulkanError,
 };
+use vulkano::pipeline::Pipeline;
 use winit::{
   application::ApplicationHandler,
   dpi::{LogicalPosition, LogicalSize},
@@ -47,6 +43,7 @@ use winit::{
 };
 
 use crate::{
+  command_buffer_builder_ext::AutoCommandBufferBuilderExt,
   init::initialize_vulkan,
   model::VikingRoomModelBuffers,
   render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
@@ -749,70 +746,13 @@ impl ApplicationHandler for App {
         )
         .unwrap();
 
-        builder
-          .begin_render_pass(
-            RenderPassBeginInfo {
-              clear_values: vec![
-                Some([0.0, 0.0, 0.0, 1.0].into()), // msaa_color clear value
-                None,                              // final_color (DontCare)
-                Some(1.0.into()),                  // depth clear value
-              ],
-              ..RenderPassBeginInfo::framebuffer(rcx.framebuffers[image_index as usize].clone())
-            },
-            SubpassBeginInfo {
-              contents: SubpassContents::Inline,
-              ..Default::default()
-            },
-          )
-          .unwrap();
-
-        builder
-          .bind_pipeline_graphics(rcx.pipeline.clone())
-          .unwrap()
-          .bind_descriptor_sets(
-            PipelineBindPoint::Graphics,
-            rcx.pipeline.layout().clone(),
-            0,
-            descriptor_set,
-          )
-          .unwrap()
-          .bind_vertex_buffers(
-            0,
-            (
-              self.model_buffers.positions.clone(),
-              self.model_buffers.normals.clone(),
-              self.model_buffers.tex_coords.clone(),
-            ),
-          )
-          .unwrap()
-          .bind_index_buffer(self.model_buffers.indices.clone())
-          .unwrap();
-
-        unsafe { builder.draw_indexed(self.model_buffers.indices.len() as u32, 1, 0, 0, 0) }
-          .unwrap();
-
-        // Move to the egui subpass
-        builder
-          .next_subpass(
-            SubpassEndInfo::default(),
-            SubpassBeginInfo {
-              contents: SubpassContents::SecondaryCommandBuffers,
-              ..Default::default()
-            },
-          )
-          .unwrap();
-
-        // Draw egui in the second subpass
-        if let Some(gui) = &mut self.gui {
-          let cb = gui.draw_on_subpass_image([
-            rcx.swapchain.image_extent()[0],
-            rcx.swapchain.image_extent()[1],
-          ]);
-          builder.execute_commands(cb).unwrap();
-        }
-
-        // End the render pass
-        builder.end_render_pass(SubpassEndInfo::default()).unwrap();
+        builder.build_app_render_pass(
+          rcx,
+          &descriptor_set,
+          image_index,
+          &self.model_buffers,
+          &mut self.gui
+        );
 
         // Build and execute the command buffer
         let command_buffer = builder.build().unwrap();
