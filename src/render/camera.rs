@@ -47,6 +47,8 @@ pub struct Camera {
   pub movement_input: DVec3,
   /// Field of view in degrees
   pub fov: f32,
+  /// Mouse/Gamepad look sensitivity
+  pub mouse_sensitivity: f64,
 }
 
 impl Camera {
@@ -65,6 +67,7 @@ impl Camera {
       max_speed: 2.0,
       movement_input: DVec3::ZERO,
       fov: 45.0,
+      mouse_sensitivity: 0.005,
     }
   }
 

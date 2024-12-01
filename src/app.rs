@@ -25,6 +25,7 @@
 use std::{sync::Arc, time::Instant};
 
 use egui_winit_vulkano::{Gui, GuiConfig};
+use gilrs::{Axis, Button, Gilrs};
 use glam::{DMat3, DMat4, DVec3, Mat4};
 use vulkano::{
   buffer::allocator::SubbufferAllocator,
@@ -75,6 +76,7 @@ use crate::{
 /// * Camera system and movement state
 /// * Performance monitoring (frame timing)
 /// * GUI integration
+/// * Gamepad state
 ///
 /// The application handles:
 /// * Window management and event processing
@@ -118,7 +120,6 @@ pub struct App {
 
   // Camera state
   camera: Camera,
-  current_movement_speed: f64,
 
   // Input state
   forward_pressed: bool,
@@ -134,6 +135,15 @@ pub struct App {
   needs_pipeline_update: bool,
   cursor_captured: bool,
   fov: f32, // Field of View in degrees
+
+  // Gamepad state
+  gilrs: Option<Gilrs>,
+  left_stick_x: f64,
+  left_stick_y: f64,
+  right_stick_x: f64,
+  right_stick_y: f64,
+  gamepad_up_pressed: bool,   // A button state
+  gamepad_down_pressed: bool, // B button state
 }
 
 impl App {
@@ -166,6 +176,16 @@ impl App {
   pub fn new(event_loop: &EventLoop<()>) -> Self {
     let initialized = initialize_vulkan(event_loop);
 
+    fn default_gilrs() -> Option<Gilrs> {
+      match Gilrs::new() {
+        Ok(gilrs) => Some(gilrs),
+        Err(e) => {
+          eprintln!("Failed to initialize gamepad support: {}", e);
+          None
+        }
+      }
+    }
+
     App {
       instance: initialized.instance,
       device: initialized.device,
@@ -187,7 +207,6 @@ impl App {
       last_frame_time: Instant::now(),
       // Camera state
       camera: Camera::new(),
-      current_movement_speed: 0.0,
       // Input state
       forward_pressed: false,
       back_pressed: false,
@@ -201,6 +220,14 @@ impl App {
       needs_pipeline_update: false,
       cursor_captured: false,
       fov: 90.0, // Default 90 degree FOV
+      // Gamepad state
+      gilrs: default_gilrs(),
+      left_stick_x: 0.0,
+      left_stick_y: 0.0,
+      right_stick_x: 0.0,
+      right_stick_y: 0.0,
+      gamepad_up_pressed: false,
+      gamepad_down_pressed: false,
     }
   }
 
@@ -217,69 +244,179 @@ impl App {
   /// * WASD keys for forward/backward/strafe
   /// * Space/Shift for up/down
   /// * Mouse for looking around
+  /// * Gamepad left stick for movement
+  /// * Gamepad right stick for camera rotation
   ///
   /// # Parameters
   /// * `delta_time` - Time elapsed since last update in seconds
   pub fn update_camera_movement(&mut self, delta_time: f64) {
-    // Calculate movement direction based on input
-    let forward = DVec3::new(self.camera.yaw.cos(), 0.0, self.camera.yaw.sin()).normalize();
-    if !forward.is_finite() {
-      return;
+    // Process gamepad events if available
+    if let Some(gilrs) = &mut self.gilrs {
+      while let Some(event) = gilrs.next_event() {
+        // Update stick positions for the active gamepad
+        let gamepad = gilrs.gamepad(event.id);
+
+        self.left_stick_x = gamepad
+          .axis_data(Axis::LeftStickX)
+          .map(|a| a.value() as f64)
+          .unwrap_or(0.0);
+        self.left_stick_y = -gamepad
+          .axis_data(Axis::LeftStickY)
+          .map(|a| a.value() as f64)
+          .unwrap_or(0.0);
+        self.right_stick_x = gamepad
+          .axis_data(Axis::RightStickX)
+          .map(|a| a.value() as f64)
+          .unwrap_or(0.0);
+        self.right_stick_y = -gamepad
+          .axis_data(Axis::RightStickY)
+          .map(|a| a.value() as f64)
+          .unwrap_or(0.0);
+
+        // Update A/B button states
+        self.gamepad_up_pressed = gamepad.is_pressed(Button::South); // A button
+        self.gamepad_down_pressed = gamepad.is_pressed(Button::East); // B button
+      }
     }
 
-    let right = DVec3::Y.cross(forward).normalize();
-    if !right.is_finite() {
-      return;
-    }
+    // Calculate movement vectors
+    let (forward, right) = self.get_movement_vectors();
 
-    // Calculate target velocity based on input
+    // Calculate target velocity based on input (keyboard + gamepad)
     let mut target_velocity = DVec3::ZERO;
-    if self.forward_pressed {
-      target_velocity += forward;
-    }
-    if self.back_pressed {
-      target_velocity -= forward;
-    }
-    if self.left_pressed {
-      target_velocity -= right;
-    }
-    if self.right_pressed {
-      target_velocity += right;
-    }
-    if self.up_pressed {
-      target_velocity.y += 1.0;
-    }
-    if self.down_pressed {
-      target_velocity.y -= 1.0;
+    let mut using_gamepad = false;
+
+    // Process gamepad input for movement
+    let movement_deadzone = 0.15;
+    let movement_speed = 2.0;
+
+    // Calculate stick vector length for proper analog movement
+    let stick_length =
+      (self.left_stick_x * self.left_stick_x + self.left_stick_y * self.left_stick_y).sqrt();
+
+    // Apply left stick for movement with non-linear response curve
+    if stick_length > movement_deadzone {
+      using_gamepad = true;
+      // Normalize the input relative to deadzone to maintain full range
+      let normalized_length = (stick_length - movement_deadzone) / (1.0 - movement_deadzone);
+      let scale = normalized_length / stick_length; // Scale factor to apply to raw inputs
+
+      // Apply non-linear response curve for finer control
+      let curve = normalized_length * normalized_length;
+
+      // Scale the raw inputs while preserving direction
+      let scaled_x = self.left_stick_x * scale * curve;
+      let scaled_y = self.left_stick_y * scale * curve;
+
+      // Add to target velocity with proper analog scaling
+      target_velocity += right * scaled_x * movement_speed;
+      target_velocity -= forward * scaled_y * movement_speed;
     }
 
-    // Normalize and scale target velocity
-    if target_velocity.length() > 0.0 {
-      target_velocity = target_velocity.normalize() * self.camera.max_speed;
+    // Handle keyboard input only if gamepad is not being used
+    if !using_gamepad {
+      if self.forward_pressed {
+        target_velocity += forward;
+      }
+      if self.back_pressed {
+        target_velocity -= forward;
+      }
+      if self.left_pressed {
+        target_velocity -= right;
+      }
+      if self.right_pressed {
+        target_velocity += right;
+      }
+      if self.up_pressed || self.gamepad_up_pressed {
+        target_velocity.y += 1.0;
+      }
+      if self.down_pressed || self.gamepad_down_pressed {
+        target_velocity.y -= 1.0;
+      }
+
+      // Normalize keyboard input direction
+      if target_velocity.length() > 0.0 {
+        target_velocity = target_velocity.normalize();
+      }
     }
 
-    // Update velocity based on input state
+    // Update velocity based on input type
     self.camera.velocity = if target_velocity.length() == 0.0 {
-      let current_speed = self.camera.velocity.length();
-      if current_speed < self.camera.movement_deceleration * delta_time {
+      // Decelerate when no input
+      let decel = self.camera.velocity.length() * 0.9;
+      if decel < 0.001 {
         DVec3::ZERO
       } else {
-        let decel_factor =
-          1.0 - (self.camera.movement_deceleration * delta_time / current_speed).clamp(0.0, 1.0);
-        self.camera.velocity * decel_factor
+        self.camera.velocity.normalize() * decel
       }
+    } else if using_gamepad {
+      // Direct velocity control for gamepad
+      target_velocity
     } else {
+      // Accelerated movement for keyboard with proper max speed
+      let target = target_velocity * self.camera.max_speed;
       let accel_factor = (-self.camera.movement_acceleration * delta_time).exp();
-      target_velocity + (self.camera.velocity - target_velocity) * accel_factor
+      target + (self.camera.velocity - target) * accel_factor
     };
 
-    self.current_movement_speed = self.camera.velocity.length();
-
-    // Apply movement
+    // Update camera position with delta time
     let movement = self.camera.velocity * delta_time;
     if movement.is_finite() {
       self.camera.position += movement;
     }
+
+    // Apply right stick for camera rotation with improved sensitivity and smoothing
+    let rotation_speed = 10.0; // Increased back to original speed now that wrapping is fixed
+    let deadzone = 0.15;
+
+    if self.right_stick_x.abs() > deadzone {
+      // Apply non-linear response curve for finer control
+      let normalized_x = (self.right_stick_x.abs() - deadzone) / (1.0 - deadzone);
+      let curve_x = normalized_x * normalized_x * 0.5;
+      // Invert X-axis for correct rotation direction
+      self.camera.yaw -= self.right_stick_x.signum() * curve_x * rotation_speed * delta_time;
+
+      // Normalize yaw to keep it within [-π, π] without causing visual changes
+      // This prevents the value from growing too large while maintaining smooth rotation
+      self.camera.yaw = ((self.camera.yaw + std::f64::consts::PI) % (std::f64::consts::PI * 2.0))
+        - std::f64::consts::PI;
+    }
+
+    if self.right_stick_y.abs() > deadzone {
+      // Apply non-linear response curve for finer control
+      let normalized_y = (self.right_stick_y.abs() - deadzone) / (1.0 - deadzone);
+      let curve_y = normalized_y * normalized_y * 0.5;
+      // Invert Y-axis for correct rotation direction
+      self.camera.pitch -= self.right_stick_y.signum() * curve_y * rotation_speed * delta_time;
+
+      // Clamp pitch to prevent camera flipping
+      self.camera.pitch = self.camera.pitch.clamp(
+        -std::f64::consts::FRAC_PI_2 + 0.1, // Just above -90 degrees
+        std::f64::consts::FRAC_PI_2 - 0.1,  // Just below 90 degrees
+      );
+    }
+
+    // Update camera front vector based on yaw and pitch
+    self.camera.front = DVec3::new(
+      self.camera.yaw.cos() * self.camera.pitch.cos(),
+      self.camera.pitch.sin(),
+      self.camera.yaw.sin() * self.camera.pitch.cos(),
+    )
+    .normalize();
+  }
+
+  fn get_movement_vectors(&self) -> (DVec3, DVec3) {
+    let forward = DVec3::new(self.camera.yaw.cos(), 0.0, self.camera.yaw.sin()).normalize();
+    if !forward.is_finite() {
+      return (DVec3::ZERO, DVec3::ZERO);
+    }
+
+    let right = DVec3::Y.cross(forward).normalize();
+    if !right.is_finite() {
+      return (DVec3::ZERO, DVec3::ZERO);
+    }
+
+    (forward, right)
   }
 }
 
@@ -658,12 +795,7 @@ impl ApplicationHandler for App {
 
         // Draw GUI and handle changes
         if let Some(gui) = &mut self.gui {
-          let changes = gui::draw_gui(
-            gui,
-            &mut self.gui_state,
-            &mut self.camera,
-            &self.current_movement_speed,
-          );
+          let changes = gui::draw_gui(gui, &mut self.gui_state, &mut self.camera);
 
           // Apply any changes from GUI
           if let Some(wireframe) = changes.wireframe_mode {
@@ -860,9 +992,6 @@ impl ApplicationHandler for App {
         let (delta_x, delta_y) = delta;
 
         self.camera.yaw -= delta_x * sensitivity; // Inverted horizontal movement
-                                                  // Clamp yaw to keep it within -2π to 2π range
-        self.camera.yaw %= 2.0 * std::f64::consts::PI;
-
         self.camera.pitch -= delta_y * sensitivity;
         // Clamp the pitch to prevent flipping
         self.camera.pitch = self
@@ -886,6 +1015,10 @@ impl ApplicationHandler for App {
   fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
     let rcx = self.rcx.as_mut().unwrap();
     rcx.window.request_redraw();
+    // Update gamepad state if available
+    if let Some(gilrs) = &mut self.gilrs {
+      gilrs.inc();
+    }
   }
 }
 

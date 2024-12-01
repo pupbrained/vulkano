@@ -68,12 +68,7 @@ impl Default for GuiStateChanges {
   }
 }
 
-pub fn draw_gui(
-  gui: &mut Gui,
-  state: &mut GuiState,
-  camera: &mut Camera,
-  current_movement_speed: &f64,
-) -> GuiStateChanges {
+pub fn draw_gui(gui: &mut Gui, state: &mut GuiState, camera: &mut Camera) -> GuiStateChanges {
   let mut changes = GuiStateChanges::default();
 
   // Calculate FPS
@@ -154,12 +149,6 @@ pub fn draw_gui(
             changes.movement_deceleration = Some(camera.movement_deceleration);
           }
         });
-
-        // Current velocity display
-        ui.label(format!(
-          "Current Speed: {:.2} units/s",
-          current_movement_speed
-        ));
 
         ui.separator();
 

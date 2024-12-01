@@ -10,6 +10,7 @@ egui_winit_vulkano = { git = "https://github.com/Letronix624/egui_winit_vulkano"
 egui = "0.29"
 image = "0.25"
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+gilrs = "0.11"
 vulkano = { version = "0.34", git = "https://github.com/vulkano-rs/vulkano.git" }
 vulkano-shaders = { version = "0.34", git = "https://github.com/vulkano-rs/vulkano.git" }
 vulkano-util = { version = "0.34", git = "https://github.com/vulkano-rs/vulkano.git" }
