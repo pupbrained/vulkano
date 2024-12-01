@@ -35,17 +35,17 @@ pub struct Camera {
 impl Camera {
   /// Creates a new camera with default settings.
   ///
-  /// Initial position is set to (0, 0, -2) with the camera facing forward (-90° yaw).
+  /// Initial position is set to (-1.1, 0.1, 1.0) with the camera facing diagonally (-45° yaw).
   pub fn new() -> Self {
     Self {
-      position: DVec3::new(0.0, 0.0, -2.0),
-      yaw: -90.0,
+      position: DVec3::new(-1.1, 0.1, 1.0),
+      yaw: -std::f64::consts::FRAC_PI_4, // -45 degrees
       pitch: 0.0,
       front: DVec3::new(0.0, 0.0, -1.0),
       velocity: DVec3::ZERO,
       movement_acceleration: 20.0,
       movement_deceleration: 10.0,
-      max_speed: 5.0,
+      max_speed: 2.0,
       movement_input: DVec3::ZERO,
       fov: 45.0,
     }

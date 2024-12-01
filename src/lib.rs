@@ -17,16 +17,16 @@ pub mod core {
 pub mod render {
   pub mod camera;
   pub mod model;
-  pub mod render;
+  pub mod pipeline;
   pub mod vertex;
 }
 
 /// Core application functionality
 pub mod app;
-/// GLSL shader management
-pub mod shaders;
 /// GUI management
 pub mod gui;
+/// GLSL shader management
+pub mod shaders;
 
 // Re-export commonly used items
 pub use core::init::{initialize_vulkan, InitializedVulkan};
@@ -36,7 +36,6 @@ pub use gui::GuiState;
 pub use render::{
   camera::Camera,
   model::{load_viking_room_model, VikingRoomModelBuffers},
-  render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
-  vertex::{Normal, Position, TexCoord},
+  pipeline::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
 };
 pub use shaders::{fs, vs};

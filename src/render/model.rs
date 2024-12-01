@@ -5,7 +5,7 @@ use vulkano::{
   memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
 };
 
-use crate::{Normal, Position, TexCoord};
+use crate::render::vertex::{Normal, Position, TexCoord};
 
 /// Represents the GPU buffers containing the 3D model data for the Viking Room.
 ///

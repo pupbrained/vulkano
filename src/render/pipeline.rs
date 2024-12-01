@@ -36,7 +36,7 @@ use vulkano::{
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
-use crate::{Normal, Position, TexCoord};
+use crate::render::vertex::{Normal, Position, TexCoord};
 
 /// Core rendering context containing all Vulkan resources needed for rendering.
 ///

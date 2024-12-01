@@ -45,9 +45,10 @@ use crate::{
   core::{command_buffer_builder_ext::AutoCommandBufferBuilderExt, init::initialize_vulkan},
   render::{
     model::VikingRoomModelBuffers,
-    render::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
+    pipeline::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
   },
   shaders::{fs, vs},
+  Camera,
 };
 
 /// Main application state containing all Vulkan and window resources.
@@ -79,16 +80,8 @@ pub struct App {
   last_frame_time: Instant,
 
   // Camera state
-  camera_pos: DVec3,
-  camera_yaw: f64,
-  camera_pitch: f64,
-  camera_velocity: DVec3,
+  camera: Camera,
   current_movement_speed: f64,
-
-  // Movement settings
-  max_speed: f64,
-  movement_acceleration: f64,
-  movement_deceleration: f64,
 
   // Input state
   forward_pressed: bool,
@@ -121,10 +114,6 @@ impl App {
   pub fn new(event_loop: &EventLoop<()>) -> Self {
     let initialized = initialize_vulkan(event_loop);
 
-    let mut gui_state = GuiState::default();
-    gui_state.max_line_width = initialized.max_line_width;
-    gui_state.supports_wide_lines = initialized.supports_wide_lines;
-
     App {
       instance: initialized.instance,
       device: initialized.device,
@@ -138,18 +127,15 @@ impl App {
       sampler: initialized.sampler.clone(),
       rcx: None,
       gui: None,
-      gui_state,
+      gui_state: GuiState {
+        max_line_width: initialized.max_line_width,
+        supports_wide_lines: initialized.supports_wide_lines,
+        ..GuiState::default()
+      },
       last_frame_time: Instant::now(),
       // Camera state
-      camera_pos: DVec3::new(-1.1, 0.1, 1.0),
-      camera_yaw: -std::f64::consts::FRAC_PI_4,
-      camera_pitch: 0.0,
-      camera_velocity: DVec3::ZERO,
+      camera: Camera::new(),
       current_movement_speed: 0.0,
-      // Movement settings
-      max_speed: 2.0,
-      movement_acceleration: 20.0,
-      movement_deceleration: 10.0,
       // Input state
       forward_pressed: false,
       back_pressed: false,
@@ -175,7 +161,7 @@ impl App {
   /// * `delta_time` - Time elapsed since last update in seconds
   pub fn update_camera_movement(&mut self, delta_time: f64) {
     // Calculate movement direction based on input
-    let forward = DVec3::new(self.camera_yaw.cos(), 0.0, self.camera_yaw.sin()).normalize();
+    let forward = DVec3::new(self.camera.yaw.cos(), 0.0, self.camera.yaw.sin()).normalize();
     if !forward.is_finite() {
       return;
     }
@@ -208,30 +194,30 @@ impl App {
 
     // Normalize and scale target velocity
     if target_velocity.length() > 0.0 {
-      target_velocity = target_velocity.normalize() * self.max_speed;
+      target_velocity = target_velocity.normalize() * self.camera.max_speed;
     }
 
     // Update velocity based on input state
-    self.camera_velocity = if target_velocity.length() == 0.0 {
-      let current_speed = self.camera_velocity.length();
-      if current_speed < self.movement_deceleration * delta_time {
+    self.camera.velocity = if target_velocity.length() == 0.0 {
+      let current_speed = self.camera.velocity.length();
+      if current_speed < self.camera.movement_deceleration * delta_time {
         DVec3::ZERO
       } else {
         let decel_factor =
-          1.0 - (self.movement_deceleration * delta_time / current_speed).clamp(0.0, 1.0);
-        self.camera_velocity * decel_factor
+          1.0 - (self.camera.movement_deceleration * delta_time / current_speed).clamp(0.0, 1.0);
+        self.camera.velocity * decel_factor
       }
     } else {
-      let accel_factor = (-self.movement_acceleration * delta_time).exp();
-      target_velocity + (self.camera_velocity - target_velocity) * accel_factor
+      let accel_factor = (-self.camera.movement_acceleration * delta_time).exp();
+      target_velocity + (self.camera.velocity - target_velocity) * accel_factor
     };
 
-    self.current_movement_speed = self.camera_velocity.length();
+    self.current_movement_speed = self.camera.velocity.length();
 
     // Apply movement
-    let movement = self.camera_velocity * delta_time;
+    let movement = self.camera.velocity * delta_time;
     if movement.is_finite() {
-      self.camera_pos += movement;
+      self.camera.position += movement;
     }
   }
 }
@@ -249,10 +235,12 @@ impl ApplicationHandler for App {
         .with_inner_size(LogicalSize::new(1280, 720));
 
       #[cfg(not(target_os = "linux"))]
-      return base_attrs.with_position(LogicalPosition::new(
-        (event_loop.primary_monitor().unwrap().size().width as i32 - 1280) / 2,
-        (event_loop.primary_monitor().unwrap().size().height as i32 - 720) / 2,
-      ));
+      {
+        base_attrs.with_position(LogicalPosition::new(
+          (event_loop.primary_monitor().unwrap().size().width as i32 - 1280) / 2,
+          (event_loop.primary_monitor().unwrap().size().height as i32 - 720) / 2,
+        ))
+      }
 
       #[cfg(target_os = "linux")]
       base_attrs
@@ -462,7 +450,12 @@ impl ApplicationHandler for App {
         if pass_events_to_game {
           rcx
             .window
-            .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+            .set_cursor_grab(
+              #[cfg(not(target_os = "linux"))]
+              winit::window::CursorGrabMode::Confined,
+              #[cfg(target_os = "linux")]
+              winit::window::CursorGrabMode::Locked,
+            )
             .unwrap();
           rcx.window.set_cursor_visible(false);
           self.cursor_captured = true;
@@ -594,12 +587,7 @@ impl ApplicationHandler for App {
           let changes = gui::draw_gui(
             gui,
             &mut self.gui_state,
-            &self.camera_pos,
-            &self.camera_yaw,
-            &self.camera_pitch,
-            &self.max_speed,
-            &self.movement_acceleration,
-            &self.movement_deceleration,
+            &mut self.camera,
             &self.current_movement_speed,
           );
 
@@ -621,21 +609,25 @@ impl ApplicationHandler for App {
             self.needs_pipeline_update = true;
           }
           if changes.camera_reset {
-            self.camera_pos = DVec3::new(-1.1, 0.1, 1.0);
-            self.camera_yaw = -std::f64::consts::FRAC_PI_4;
-            self.camera_pitch = 0.0;
+            self.camera.position = DVec3::new(-1.1, 0.1, 1.0);
+            self.camera.yaw = -std::f64::consts::FRAC_PI_4;
+            self.camera.pitch = 0.0;
           }
           if changes.movement_reset {
-            self.camera_velocity = DVec3::ZERO;
+            // Reset velocity and all movement settings to default values
+            self.camera.velocity = DVec3::ZERO;
+            self.camera.movement_acceleration = 20.0;
+            self.camera.movement_deceleration = 10.0;
+            self.camera.max_speed = 2.0;
           }
           if let Some(speed) = changes.max_speed {
-            self.max_speed = speed;
+            self.camera.max_speed = speed;
           }
           if let Some(accel) = changes.movement_acceleration {
-            self.movement_acceleration = accel;
+            self.camera.movement_acceleration = accel;
           }
           if let Some(decel) = changes.movement_deceleration {
-            self.movement_deceleration = decel;
+            self.camera.movement_deceleration = decel;
           }
         }
         let uniform_buffer = {
@@ -651,12 +643,12 @@ impl ApplicationHandler for App {
 
           // Update view matrix based on camera position
           let view = DMat4::look_at_rh(
-            self.camera_pos,
-            self.camera_pos
+            self.camera.position,
+            self.camera.position
               + DVec3::new(
-                self.camera_yaw.cos() * self.camera_pitch.cos(),
-                self.camera_pitch.sin(),
-                self.camera_yaw.sin() * self.camera_pitch.cos(),
+                self.camera.yaw.cos() * self.camera.pitch.cos(),
+                self.camera.pitch.sin(),
+                self.camera.yaw.sin() * self.camera.pitch.cos(),
               ),
             DVec3::new(0.0, -1.0, 0.0),
           );
@@ -705,6 +697,19 @@ impl ApplicationHandler for App {
           rcx.recreate_swapchain = true;
         }
 
+        // Make sure the previous frame is completely finished before starting a new one
+        if let Some(previous_frame_end) = rcx.previous_frame_end.as_mut() {
+          previous_frame_end.cleanup_finished();
+          match previous_frame_end.flush() {
+            Ok(_) => (),
+            Err(e) => {
+              println!("Failed to wait for previous frame: {e}");
+              rcx.recreate_swapchain = true;
+              return;
+            }
+          }
+        }
+
         let mut builder = AutoCommandBufferBuilder::primary(
           self.command_buffer_allocator.clone(),
           self.queue.queue_family_index(),
@@ -722,13 +727,14 @@ impl ApplicationHandler for App {
 
         // Build and execute the command buffer
         let command_buffer = builder.build().unwrap();
-        let final_future = rcx
-          .previous_frame_end
-          .take()
-          .unwrap()
+
+        let acquire_semaphore = sync::now(self.device.clone());
+
+        let final_future = acquire_semaphore
           .join(acquire_future)
           .then_execute(self.queue.clone(), command_buffer)
           .unwrap()
+          .then_signal_semaphore()
           .then_swapchain_present(
             self.queue.clone(),
             SwapchainPresentInfo::swapchain_image_index(rcx.swapchain.clone(), image_index),
@@ -768,14 +774,15 @@ impl ApplicationHandler for App {
         let sensitivity = 0.005;
         let (delta_x, delta_y) = delta;
 
-        self.camera_yaw -= delta_x * sensitivity; // Inverted horizontal movement
+        self.camera.yaw -= delta_x * sensitivity; // Inverted horizontal movement
                                                   // Clamp yaw to keep it within -2π to 2π range
-        self.camera_yaw %= 2.0 * std::f64::consts::PI;
+        self.camera.yaw %= 2.0 * std::f64::consts::PI;
 
-        self.camera_pitch -= delta_y * sensitivity;
+        self.camera.pitch -= delta_y * sensitivity;
         // Clamp the pitch to prevent flipping
-        self.camera_pitch = self
-          .camera_pitch
+        self.camera.pitch = self
+          .camera
+          .pitch
           .clamp(-89.0f64.to_radians(), 89.0f64.to_radians());
       }
     }
