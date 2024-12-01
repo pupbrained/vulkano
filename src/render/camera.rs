@@ -4,11 +4,28 @@ use glam::{DMat4, DVec3};
 ///
 /// The camera uses a position-target system with yaw and pitch angles for rotation.
 /// It implements smooth movement with acceleration and deceleration for better control.
+/// The camera's orientation is determined by its yaw (horizontal) and pitch (vertical) angles,
+/// which are used to calculate the front vector.
 ///
 /// # Properties
 /// * Position and orientation are stored using 64-bit floating point values for precision
 /// * Supports field of view (FOV) adjustment
 /// * Implements velocity-based movement with acceleration and max speed limits
+///
+/// # Example
+/// ```
+/// let mut camera = Camera::new();
+///
+/// // Update camera position
+/// camera.position = DVec3::new(0.0, 1.0, -5.0);
+///
+/// // Rotate camera 45 degrees right
+/// camera.yaw = std::f64::consts::FRAC_PI_4;
+///
+/// // Move camera forward
+/// camera.movement_input = DVec3::new(0.0, 0.0, -1.0);
+/// camera.update_movement(0.016); // Update with 16ms frame time
+/// ```
 pub struct Camera {
   /// Current position in 3D space
   pub position: DVec3,
@@ -53,13 +70,32 @@ impl Camera {
 
   /// Updates the camera's movement based on current velocity and input.
   ///
-  /// This method handles:
-  /// * Acceleration based on movement input
-  /// * Deceleration when no input is present
-  /// * Velocity clamping to max speed
+  /// This method implements a physics-based movement system with the following features:
+  /// * Acceleration when movement input is present
+  /// * Deceleration when no input is present (friction)
+  /// * Maximum speed limiting
+  /// * Frame-rate independent movement using delta time
+  ///
+  /// The movement input is expected to be a normalized direction vector where:
+  /// * X: Positive = Right, Negative = Left
+  /// * Y: Positive = Up, Negative = Down
+  /// * Z: Positive = Backward, Negative = Forward
   ///
   /// # Parameters
   /// * `delta_time` - Time elapsed since last update in seconds
+  ///
+  /// # Example
+  /// ```
+  /// let mut camera = Camera::new();
+  ///
+  /// // Move forward
+  /// camera.movement_input = DVec3::new(0.0, 0.0, -1.0);
+  /// camera.update_movement(0.016);
+  ///
+  /// // Stop moving (will decelerate)
+  /// camera.movement_input = DVec3::ZERO;
+  /// camera.update_movement(0.016);
+  /// ```
   pub fn update_movement(&mut self, delta_time: f64) {
     // Apply acceleration based on input
     let acceleration = self.movement_input * self.movement_acceleration;
@@ -87,7 +123,14 @@ impl Camera {
 
   /// Computes the view matrix for the camera's current position and orientation.
   ///
-  /// Returns a 4x4 matrix that transforms world space to camera space.
+  /// The view matrix transforms world space coordinates into camera space coordinates.
+  /// It is constructed by combining:
+  /// * The camera's position (translation)
+  /// * The camera's orientation (rotation from yaw and pitch)
+  ///
+  /// # Returns
+  /// A 4x4 matrix that transforms world space to camera space, suitable for use
+  /// in vertex shaders and other rendering calculations.
   pub fn get_view_matrix(&self) -> DMat4 {
     DMat4::look_at_rh(self.position, self.position + self.front, DVec3::Y)
   }

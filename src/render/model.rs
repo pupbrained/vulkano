@@ -9,11 +9,21 @@ use crate::render::vertex::{Normal, Position, TexCoord};
 
 /// Represents the GPU buffers containing the 3D model data for the Viking Room.
 ///
-/// This struct holds four Vulkan buffers:
-/// * positions: Vertex positions in 3D space
-/// * normals: Vertex normal vectors used for lighting calculations
-/// * tex_coords: Texture coordinates for mapping textures onto the model
-/// * indices: Index buffer defining the triangles that make up the model
+/// This struct holds four Vulkan buffers that store different vertex attributes:
+/// * `positions`: (x, y, z) coordinates of each vertex in 3D space
+/// * `normals`: Surface normal vectors used for lighting calculations
+/// * `tex_coords`: (u, v) texture coordinates for mapping textures
+/// * `indices`: Vertex indices that define triangles (3 indices per triangle)
+///
+/// The buffers are created on the GPU for optimal rendering performance.
+/// Each buffer is stored as a Vulkan Subbuffer, allowing for efficient memory
+/// management and data transfer between CPU and GPU.
+///
+/// # Memory Layout
+/// * positions: `[x, y, z, x, y, z, ...]` - 3 floats per vertex
+/// * normals: `[nx, ny, nz, nx, ny, nz, ...]` - 3 floats per vertex
+/// * tex_coords: `[u, v, u, v, ...]` - 2 floats per vertex
+/// * indices: `[i1, i2, i3, i1, i2, i3, ...]` - 3 u32s per triangle
 pub struct VikingRoomModelBuffers {
   pub positions: Subbuffer<[Position]>,
   pub normals: Subbuffer<[Normal]>,
@@ -25,8 +35,11 @@ pub struct VikingRoomModelBuffers {
 ///
 /// This function performs the following steps:
 /// 1. Loads and triangulates the OBJ model from "models/viking_room.obj"
-/// 2. Extracts vertex data (positions, normals, texture coordinates)
-/// 3. Creates Vulkan buffers for the extracted data optimized for GPU access
+/// 2. Extracts vertex attributes (positions, normals, texture coordinates)
+/// 3. Creates optimized Vulkan buffers with appropriate memory flags:
+///    * `BufferUsage::VERTEX_BUFFER` for vertex data
+///    * `BufferUsage::INDEX_BUFFER` for indices
+///    * `MemoryTypeFilter::PREFER_DEVICE` for GPU-local storage
 ///
 /// # Parameters
 /// * `memory_allocator` - The Vulkan memory allocator used to create the GPU buffers
@@ -36,8 +49,23 @@ pub struct VikingRoomModelBuffers {
 ///
 /// # Panics
 /// Will panic if:
-/// * The OBJ file cannot be loaded
-/// * Buffer creation fails
+/// * The OBJ file cannot be found or is invalid
+/// * There is insufficient GPU memory
+/// * Buffer creation fails due to Vulkan errors
+///
+/// # Example
+/// ```
+/// let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+/// let model_buffers = load_viking_room_model(memory_allocator);
+///
+/// // Use the buffers in a vertex buffer binding
+/// command_buffer.bind_vertex_buffers(0, (
+///     model_buffers.positions.clone(),
+///     model_buffers.normals.clone(),
+///     model_buffers.tex_coords.clone()
+/// ));
+/// command_buffer.bind_index_buffer(model_buffers.indices.clone());
+/// ```
 pub fn load_viking_room_model(
   memory_allocator: Arc<StandardMemoryAllocator>,
 ) -> VikingRoomModelBuffers {

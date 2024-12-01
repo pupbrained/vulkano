@@ -1,11 +1,26 @@
 //! Main application logic and Vulkan initialization.
 //!
-//! This module handles:
-//! * Vulkan device selection and initialization
-//! * Window and event management
-//! * Resource creation and management
-//! * Render loop coordination
-//! * Camera and input handling
+//! This module implements the core application functionality:
+//! * Vulkan instance and device initialization with feature selection
+//! * Window creation and event handling (resize, input, focus)
+//! * Resource management (buffers, textures, shaders)
+//! * Render loop coordination and frame timing
+//! * Camera control system with smooth movement
+//!
+//! # Architecture
+//! The application uses a modular architecture:
+//! * `App`: Main application state and event handling
+//! * `RenderContext`: Vulkan rendering pipeline and resources
+//! * `Camera`: 3D camera system with physics-based movement
+//! * `Gui`: Egui-based user interface integration
+//!
+//! # Frame Loop
+//! Each frame follows this sequence:
+//! 1. Process window and input events
+//! 2. Update camera position and orientation
+//! 3. Acquire next swapchain image
+//! 4. Record command buffer with render commands
+//! 5. Submit commands and present frame
 
 use std::{sync::Arc, time::Instant};
 
@@ -54,10 +69,32 @@ use crate::{
 /// Main application state containing all Vulkan and window resources.
 ///
 /// This struct manages the complete state of the Vulkan application, including:
-/// * Vulkan instance, device, and resource management
-/// * Camera and movement controls
-/// * Rendering pipeline configuration
-/// * Performance monitoring
+/// * Vulkan instance, physical device, and logical device
+/// * Command pools and memory allocators
+/// * Descriptor sets and pipeline resources
+/// * Camera system and movement state
+/// * Performance monitoring (frame timing)
+/// * GUI integration
+///
+/// The application handles:
+/// * Window management and event processing
+/// * Resource creation and cleanup
+/// * Frame timing and vsync
+/// * Input processing for camera control
+///
+/// # Resource Management
+/// Critical resources are stored in `Arc` to allow safe sharing:
+/// * Vulkan device and queues
+/// * Memory allocators
+/// * Command pools
+/// * Descriptor sets
+///
+/// # Example Usage
+/// ```
+/// let event_loop = EventLoop::new();
+/// let app = App::new(&event_loop);
+/// event_loop.run(app); // Starts the main application loop
+/// ```
 pub struct App {
   // Vulkan resources
   instance: Arc<Instance>,
@@ -102,15 +139,30 @@ pub struct App {
 impl App {
   /// Creates a new application instance and initializes all Vulkan resources.
   ///
-  /// This function:
-  /// * Creates the Vulkan instance and selects a suitable physical device
-  /// * Sets up the logical device and command queues
-  /// * Creates the swapchain and render passes
-  /// * Loads the 3D model and textures
-  /// * Initializes the GUI system
+  /// This function performs the complete Vulkan initialization sequence:
+  /// 1. Creates Vulkan instance with debug validation layers
+  /// 2. Selects physical device with required features:
+  ///    * Geometry shader support
+  ///    * Anisotropic filtering
+  ///    * Wide lines for debug rendering
+  /// 3. Creates logical device and command queues
+  /// 4. Initializes memory allocators and descriptor pools
+  /// 5. Creates the window and swapchain
+  /// 6. Loads the Viking Room model and textures
+  /// 7. Sets up the GUI system with Egui
   ///
   /// # Parameters
   /// * `event_loop` - The winit event loop to create the window for
+  ///
+  /// # Returns
+  /// A fully initialized `App` instance ready to start rendering
+  ///
+  /// # Panics
+  /// Will panic if:
+  /// * No suitable Vulkan device is found
+  /// * Required device features are not available
+  /// * Window creation fails
+  /// * Resource allocation fails
   pub fn new(event_loop: &EventLoop<()>) -> Self {
     let initialized = initialize_vulkan(event_loop);
 
@@ -155,7 +207,16 @@ impl App {
   /// Updates camera position and orientation based on current movement state.
   ///
   /// Applies velocity and acceleration to smoothly move the camera
-  /// according to user input.
+  /// according to user input. The movement system features:
+  /// * Smooth acceleration and deceleration
+  /// * Maximum speed limiting
+  /// * Frame-rate independent movement
+  /// * Combined movement in multiple directions
+  ///
+  /// The camera's movement is controlled by:
+  /// * WASD keys for forward/backward/strafe
+  /// * Space/Shift for up/down
+  /// * Mouse for looking around
   ///
   /// # Parameters
   /// * `delta_time` - Time elapsed since last update in seconds
@@ -414,11 +475,24 @@ impl ApplicationHandler for App {
 
   /// Processes window events such as resizing, keyboard input, and mouse movement.
   ///
-  /// Handles:
-  /// * Window resize events by recreating the swapchain
-  /// * Keyboard input for camera movement
-  /// * Mouse input for camera rotation
-  /// * Window close events
+  /// Handles the following event types:
+  /// * Window resize: Triggers swapchain recreation
+  /// * Window close: Initiates cleanup and exit
+  /// * Keyboard events: Updates camera movement state
+  /// * Mouse events: Updates camera orientation
+  /// * Focus events: Handles cursor capture
+  ///
+  /// Input processing includes:
+  /// * WASD keys for camera movement
+  /// * Space/Shift for vertical movement
+  /// * Escape to toggle cursor capture
+  /// * Mouse movement for camera rotation
+  /// * Mouse buttons for GUI interaction
+  ///
+  /// # Parameters
+  /// * `event_loop` - Active event loop reference
+  /// * `window_id` - ID of the window generating the event
+  /// * `event` - The window event to process
   fn window_event(
     &mut self,
     event_loop: &ActiveEventLoop,
@@ -762,7 +836,18 @@ impl ApplicationHandler for App {
   /// Processes raw device events such as mouse movement.
   ///
   /// Used primarily for camera control, converting raw mouse movement
-  /// into camera rotation.
+  /// into camera rotation. Features include:
+  /// * Configurable mouse sensitivity
+  /// * Vertical rotation limits (no over-rotation)
+  /// * Smooth motion interpolation
+  ///
+  /// Only processes mouse motion events when the cursor is captured
+  /// to prevent unwanted camera movement during GUI interaction.
+  ///
+  /// # Parameters
+  /// * `event_loop` - Active event loop reference
+  /// * `device_id` - ID of the input device
+  /// * `event` - The device event to process
   fn device_event(
     &mut self,
     _event_loop: &ActiveEventLoop,
@@ -790,7 +875,14 @@ impl ApplicationHandler for App {
 
   /// Called when the event loop is about to wait for new events.
   ///
-  /// Used to perform any necessary cleanup or state updates between frames.
+  /// Used to perform any necessary cleanup or state updates between frames:
+  /// * Updates GUI state
+  /// * Processes deferred events
+  /// * Updates performance metrics
+  /// * Triggers resource cleanup if needed
+  ///
+  /// # Parameters
+  /// * `event_loop` - Active event loop reference
   fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
     let rcx = self.rcx.as_mut().unwrap();
     rcx.window.request_redraw();
