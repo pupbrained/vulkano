@@ -25,11 +25,14 @@ pub mod render {
 pub mod app;
 /// GLSL shader management
 pub mod shaders;
+/// GUI management
+pub mod gui;
 
 // Re-export commonly used items
 pub use core::init::{initialize_vulkan, InitializedVulkan};
 
 pub use app::App;
+pub use gui::GuiState;
 pub use render::{
   camera::Camera,
   model::{load_viking_room_model, VikingRoomModelBuffers},

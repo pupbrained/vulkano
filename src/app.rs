@@ -31,9 +31,11 @@ use vulkano::{
   Validated,
   VulkanError,
 };
+#[cfg(not(target_os = "linux"))]
+use winit::dpi::LogicalPosition;
 use winit::{
   application::ApplicationHandler,
-  dpi::{LogicalPosition, LogicalSize},
+  dpi::LogicalSize,
   event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
   event_loop::{ActiveEventLoop, EventLoop},
   window::{Window, WindowId},
@@ -56,51 +58,52 @@ use crate::{
 /// * Rendering pipeline configuration
 /// * Performance monitoring
 pub struct App {
-  // Vulkan core resources
+  // Vulkan resources
   instance: Arc<Instance>,
   device: Arc<Device>,
   queue: Arc<Queue>,
-
-  // Memory and resource allocators
   memory_allocator: Arc<StandardMemoryAllocator>,
   descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
   command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-  uniform_buffer_allocator: SubbufferAllocator,
-
-  // 3D model and texture resources
   model_buffers: VikingRoomModelBuffers,
+  uniform_buffer_allocator: SubbufferAllocator,
   texture: Arc<ImageView>,
   sampler: Arc<Sampler>,
 
   // Rendering context and UI
   rcx: Option<RenderContext>,
   gui: Option<Gui>,
+  gui_state: GuiState,
 
   // Performance monitoring
   last_frame_time: Instant,
-  fps: f32,
 
-  // Camera position and orientation
+  // Camera state
   camera_pos: DVec3,
   camera_yaw: f64,
   camera_pitch: f64,
-  camera_front: DVec3,
-
-  // Camera movement parameters
   camera_velocity: DVec3,
+  current_movement_speed: f64,
+
+  // Movement settings
+  max_speed: f64,
   movement_acceleration: f64,
   movement_deceleration: f64,
-  max_speed: f64,
-  movement_input: DVec3,
+
+  // Input state
+  forward_pressed: bool,
+  back_pressed: bool,
+  left_pressed: bool,
+  right_pressed: bool,
+  up_pressed: bool,
+  down_pressed: bool,
 
   // Rendering settings
   wireframe_mode: bool,
   line_width: f32,
-  max_line_width: f32,
   needs_pipeline_update: bool,
-  supports_wide_lines: bool,
   cursor_captured: bool,
-  fov: f32, // Field of view in degrees
+  fov: f32, // Field of View in degrees
 }
 
 impl App {
@@ -118,42 +121,46 @@ impl App {
   pub fn new(event_loop: &EventLoop<()>) -> Self {
     let initialized = initialize_vulkan(event_loop);
 
+    let mut gui_state = GuiState::default();
+    gui_state.max_line_width = initialized.max_line_width;
+    gui_state.supports_wide_lines = initialized.supports_wide_lines;
+
     App {
       instance: initialized.instance,
       device: initialized.device,
       queue: initialized.queue,
-      memory_allocator: initialized.memory_allocator,
-      descriptor_set_allocator: initialized.descriptor_set_allocator,
-      command_buffer_allocator: initialized.command_buffer_allocator,
+      memory_allocator: initialized.memory_allocator.clone(),
+      descriptor_set_allocator: initialized.descriptor_set_allocator.clone(),
+      command_buffer_allocator: initialized.command_buffer_allocator.clone(),
       model_buffers: initialized.model_buffers,
       uniform_buffer_allocator: initialized.uniform_buffer_allocator,
-      texture: initialized.texture,
-      sampler: initialized.sampler,
+      texture: initialized.texture.clone(),
+      sampler: initialized.sampler.clone(),
       rcx: None,
       gui: None,
+      gui_state,
       last_frame_time: Instant::now(),
-      fps: 0.0,
       // Camera state
       camera_pos: DVec3::new(-1.1, 0.1, 1.0),
       camera_yaw: -std::f64::consts::FRAC_PI_4,
       camera_pitch: 0.0,
-      camera_front: DVec3::new(
-        (-std::f64::consts::FRAC_PI_4).cos() * 0.0f64.cos(),
-        0.0f64.sin(),
-        (-std::f64::consts::FRAC_PI_4).sin() * 0.0f64.cos(),
-      )
-      .normalize(),
       camera_velocity: DVec3::ZERO,
+      current_movement_speed: 0.0,
+      // Movement settings
+      max_speed: 2.0,
       movement_acceleration: 20.0,
       movement_deceleration: 10.0,
-      max_speed: 2.0,
-      movement_input: DVec3::ZERO,
+      // Input state
+      forward_pressed: false,
+      back_pressed: false,
+      left_pressed: false,
+      right_pressed: false,
+      up_pressed: false,
+      down_pressed: false,
       // Rendering settings
       wireframe_mode: false,
       line_width: 1.0,
-      max_line_width: initialized.max_line_width,
       needs_pipeline_update: false,
-      supports_wide_lines: initialized.supports_wide_lines,
       cursor_captured: false,
       fov: 90.0, // Default 90 degree FOV
     }
@@ -169,38 +176,63 @@ impl App {
   pub fn update_camera_movement(&mut self, delta_time: f64) {
     // Calculate movement direction based on input
     let forward = DVec3::new(self.camera_yaw.cos(), 0.0, self.camera_yaw.sin()).normalize();
+    if !forward.is_finite() {
+      return;
+    }
 
-    let right = forward.cross(DVec3::new(0.0, -1.0, 0.0)).normalize();
+    let right = DVec3::Y.cross(forward).normalize();
+    if !right.is_finite() {
+      return;
+    }
 
     // Calculate target velocity based on input
     let mut target_velocity = DVec3::ZERO;
-    if self.movement_input.length() > 0.0 {
-      // Combine horizontal movement
-      target_velocity += forward * self.movement_input.z;
-      target_velocity += right * self.movement_input.x;
-      // Add vertical movement
-      target_velocity.y = self.movement_input.y;
-
-      // Normalize and scale to max speed if moving diagonally
-      if target_velocity.length() > 1.0 {
-        target_velocity = target_velocity.normalize();
-      }
-      target_velocity *= self.max_speed;
+    if self.forward_pressed {
+      target_velocity += forward;
+    }
+    if self.back_pressed {
+      target_velocity -= forward;
+    }
+    if self.left_pressed {
+      target_velocity -= right;
+    }
+    if self.right_pressed {
+      target_velocity += right;
+    }
+    if self.up_pressed {
+      target_velocity.y += 1.0;
+    }
+    if self.down_pressed {
+      target_velocity.y -= 1.0;
     }
 
-    // Accelerate or decelerate towards target velocity
-    let acceleration = if target_velocity.length() > 0.0 {
-      self.movement_acceleration
+    // Normalize and scale target velocity
+    if target_velocity.length() > 0.0 {
+      target_velocity = target_velocity.normalize() * self.max_speed;
+    }
+
+    // Update velocity based on input state
+    self.camera_velocity = if target_velocity.length() == 0.0 {
+      let current_speed = self.camera_velocity.length();
+      if current_speed < self.movement_deceleration * delta_time {
+        DVec3::ZERO
+      } else {
+        let decel_factor =
+          1.0 - (self.movement_deceleration * delta_time / current_speed).clamp(0.0, 1.0);
+        self.camera_velocity * decel_factor
+      }
     } else {
-      self.movement_deceleration
+      let accel_factor = (-self.movement_acceleration * delta_time).exp();
+      target_velocity + (self.camera_velocity - target_velocity) * accel_factor
     };
 
-    // Update velocity with acceleration
-    let velocity_delta = (target_velocity - self.camera_velocity) * acceleration * delta_time;
-    self.camera_velocity += velocity_delta;
+    self.current_movement_speed = self.camera_velocity.length();
 
-    // Update position
-    self.camera_pos += self.camera_velocity * delta_time;
+    // Apply movement
+    let movement = self.camera_velocity * delta_time;
+    if movement.is_finite() {
+      self.camera_pos += movement;
+    }
   }
 }
 
@@ -210,24 +242,23 @@ impl ApplicationHandler for App {
   /// Called when the application window gains focus or is restored.
   /// Recreates any resources that may have been lost during suspension.
   fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-    let window = Arc::new(
-      event_loop
-        .create_window(
-          Window::default_attributes()
-            .with_decorations(true)
-            .with_title("Vulkano App")
-            .with_inner_size(LogicalSize::new(1280, 720))
-            .with_position(if !cfg!(target_os = "linux") {
-              LogicalPosition::new(
-                (event_loop.primary_monitor().unwrap().size().width as i32 - 1280) / 2,
-                (event_loop.primary_monitor().unwrap().size().height as i32 - 720) / 2,
-              )
-            } else {
-              LogicalPosition::new(0, 0) // Default position on Linux
-            }),
-        )
-        .unwrap(),
-    );
+    let window_attrs = {
+      let base_attrs = Window::default_attributes()
+        .with_decorations(true)
+        .with_title("Vulkano App")
+        .with_inner_size(LogicalSize::new(1280, 720));
+
+      #[cfg(not(target_os = "linux"))]
+      return base_attrs.with_position(LogicalPosition::new(
+        (event_loop.primary_monitor().unwrap().size().width as i32 - 1280) / 2,
+        (event_loop.primary_monitor().unwrap().size().height as i32 - 720) / 2,
+      ));
+
+      #[cfg(target_os = "linux")]
+      base_attrs
+    };
+
+    let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
 
     let surface = Surface::from_window(self.instance.clone(), window.clone()).unwrap();
     let window_size = window.inner_size();
@@ -306,40 +337,40 @@ impl ApplicationHandler for App {
     };
 
     let render_pass = vulkano::ordered_passes_renderpass!(
-        self.device.clone(),
-        attachments: {
-            msaa_color: {
-                format: swapchain.image_format(),
-                samples: 4,
-                load_op: Clear,
-                store_op: DontCare,
-            },
-            final_color: {
-                format: swapchain.image_format(),
-                samples: 1,
-                load_op: DontCare,
-                store_op: Store,
-            },
-            depth: {
-                format: Format::D32_SFLOAT,
-                samples: 4,
-                load_op: Clear,
-                store_op: DontCare,
-            }
+      self.device.clone(),
+      attachments: {
+        msaa_color: {
+          format: swapchain.image_format(),
+          samples: 4,
+          load_op: Clear,
+          store_op: DontCare,
         },
-        passes: [
-            {
-                color: [msaa_color],
-                color_resolve: [final_color],
-                depth_stencil: {depth},
-                input: []
-            },
-            {
-                color: [final_color],
-                depth_stencil: {},
-                input: []
-            }
-        ]
+        final_color: {
+          format: swapchain.image_format(),
+          samples: 1,
+          load_op: DontCare,
+          store_op: Store,
+        },
+        depth: {
+          format: Format::D32_SFLOAT,
+          samples: 4,
+          load_op: Clear,
+          store_op: DontCare,
+        }
+      },
+      passes: [
+        {
+          color: [msaa_color],
+          color_resolve: [final_color],
+          depth_stencil: {depth},
+          input: []
+        },
+        {
+          color: [final_color],
+          depth_stencil: {},
+          input: []
+        }
+      ]
     )
     .unwrap();
 
@@ -406,9 +437,12 @@ impl ApplicationHandler for App {
     _window_id: WindowId,
     event: WindowEvent,
   ) {
+    // Handle egui events and check if we should pass events to game
     let mut pass_events_to_game = true;
     if let Some(gui) = &mut self.gui {
-      pass_events_to_game = !gui.update(&event);
+      if gui.update(&event) {
+        pass_events_to_game = false;
+      }
     }
 
     let rcx = self.rcx.as_mut().unwrap();
@@ -419,6 +453,20 @@ impl ApplicationHandler for App {
       }
       WindowEvent::Resized(_) => {
         rcx.recreate_swapchain = true;
+      }
+      WindowEvent::MouseInput {
+        state: ElementState::Pressed,
+        button: MouseButton::Left,
+        ..
+      } => {
+        if pass_events_to_game {
+          rcx
+            .window
+            .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+            .unwrap();
+          rcx.window.set_cursor_visible(false);
+          self.cursor_captured = true;
+        }
       }
       WindowEvent::KeyboardInput {
         event:
@@ -446,29 +494,24 @@ impl ApplicationHandler for App {
           return;
         }
 
-        let value = match state {
-          ElementState::Pressed => 1.0,
-          ElementState::Released => 0.0,
-        };
-
         match key {
           PhysicalKey::Code(winit::keyboard::KeyCode::KeyW) => {
-            self.movement_input.z = value;
+            self.forward_pressed = state == ElementState::Pressed;
           }
           PhysicalKey::Code(winit::keyboard::KeyCode::KeyS) => {
-            self.movement_input.z = -value;
+            self.back_pressed = state == ElementState::Pressed;
           }
           PhysicalKey::Code(winit::keyboard::KeyCode::KeyA) => {
-            self.movement_input.x = -value;
+            self.left_pressed = state == ElementState::Pressed;
           }
           PhysicalKey::Code(winit::keyboard::KeyCode::KeyD) => {
-            self.movement_input.x = value;
+            self.right_pressed = state == ElementState::Pressed;
           }
           PhysicalKey::Code(winit::keyboard::KeyCode::Space) => {
-            self.movement_input.y = value;
+            self.up_pressed = state == ElementState::Pressed;
           }
           PhysicalKey::Code(winit::keyboard::KeyCode::ShiftLeft) => {
-            self.movement_input.y = -value;
+            self.down_pressed = state == ElementState::Pressed;
           }
           PhysicalKey::Code(winit::keyboard::KeyCode::Escape) => {
             if state == ElementState::Pressed {
@@ -482,34 +525,7 @@ impl ApplicationHandler for App {
           }
           _ => {}
         }
-
-        // Wait for any pending operations to complete before updating the pipeline
-        if let Some(rcx) = &mut self.rcx {
-          rcx.previous_frame_end.as_mut().unwrap().cleanup_finished();
-        }
       }
-      WindowEvent::MouseInput {
-        state,
-        button,
-        ..
-      } => {
-        if button == MouseButton::Left && pass_events_to_game && state == ElementState::Pressed {
-          self.cursor_captured = true;
-          // Try Locked mode first, fall back to Confined if not supported
-          if rcx
-            .window
-            .set_cursor_grab(winit::window::CursorGrabMode::Locked)
-            .is_err()
-          {
-            rcx
-              .window
-              .set_cursor_grab(winit::window::CursorGrabMode::Confined)
-              .unwrap();
-          }
-          rcx.window.set_cursor_visible(false);
-        }
-      }
-      WindowEvent::CursorMoved { .. } => {}
       WindowEvent::MouseWheel { delta, .. } => {
         if self.cursor_captured {
           match delta {
@@ -529,7 +545,11 @@ impl ApplicationHandler for App {
       WindowEvent::RedrawRequested => {
         let now = Instant::now();
         let frame_time = now.duration_since(self.last_frame_time).as_secs_f64();
-        self.update_camera_movement(frame_time);
+        self.last_frame_time = now;
+
+        // Clamp frame time to avoid huge jumps
+        let clamped_frame_time = frame_time.min(0.1); // Max 100ms per frame
+        self.update_camera_movement(clamped_frame_time);
 
         let rcx = self.rcx.as_mut().unwrap();
         let window_size = rcx.window.inner_size();
@@ -569,6 +589,55 @@ impl ApplicationHandler for App {
           self.needs_pipeline_update = false;
         }
 
+        // Draw GUI and handle changes
+        if let Some(gui) = &mut self.gui {
+          let changes = gui::draw_gui(
+            gui,
+            &mut self.gui_state,
+            &self.camera_pos,
+            &self.camera_yaw,
+            &self.camera_pitch,
+            &self.max_speed,
+            &self.movement_acceleration,
+            &self.movement_deceleration,
+            &self.current_movement_speed,
+          );
+
+          // Apply any changes from GUI
+          if let Some(wireframe) = changes.wireframe_mode {
+            if wireframe != self.wireframe_mode {
+              self.wireframe_mode = wireframe;
+              self.needs_pipeline_update = true;
+            }
+          }
+          if let Some(line_width) = changes.line_width {
+            if line_width != self.line_width {
+              self.line_width = line_width;
+              self.needs_pipeline_update = true;
+            }
+          }
+          if let Some(fov) = changes.fov {
+            self.fov = fov;
+            self.needs_pipeline_update = true;
+          }
+          if changes.camera_reset {
+            self.camera_pos = DVec3::new(-1.1, 0.1, 1.0);
+            self.camera_yaw = -std::f64::consts::FRAC_PI_4;
+            self.camera_pitch = 0.0;
+          }
+          if changes.movement_reset {
+            self.camera_velocity = DVec3::ZERO;
+          }
+          if let Some(speed) = changes.max_speed {
+            self.max_speed = speed;
+          }
+          if let Some(accel) = changes.movement_acceleration {
+            self.movement_acceleration = accel;
+          }
+          if let Some(decel) = changes.movement_deceleration {
+            self.movement_deceleration = decel;
+          }
+        }
         let uniform_buffer = {
           // Apply fixed rotations to orient the model correctly
           let vertical_rotation = DMat3::from_rotation_x(-std::f64::consts::FRAC_PI_2);
@@ -583,7 +652,12 @@ impl ApplicationHandler for App {
           // Update view matrix based on camera position
           let view = DMat4::look_at_rh(
             self.camera_pos,
-            self.camera_pos + self.camera_front,
+            self.camera_pos
+              + DVec3::new(
+                self.camera_yaw.cos() * self.camera_pitch.cos(),
+                self.camera_pitch.sin(),
+                self.camera_yaw.sin() * self.camera_pitch.cos(),
+              ),
             DVec3::new(0.0, -1.0, 0.0),
           );
 
@@ -629,138 +703,6 @@ impl ApplicationHandler for App {
 
         if suboptimal {
           rcx.recreate_swapchain = true;
-        }
-
-        // Update egui UI before rendering
-        if let Some(gui) = &mut self.gui {
-          gui.immediate_ui(|gui| {
-            egui::Window::new("Stats & Controls")
-              .default_pos([10.0, 10.0])
-              .show(&gui.context(), |ui| {
-                // Performance stats
-                ui.heading("Performance");
-                let now = Instant::now();
-                let frame_time = now.duration_since(self.last_frame_time).as_secs_f32();
-                self.fps = 1.0 / frame_time;
-                self.last_frame_time = now;
-                ui.label(format!("FPS: {:.1}", self.fps));
-                ui.label(format!("Frame Time: {:.2}ms", frame_time * 1000.0));
-
-                ui.separator();
-
-                // Camera position info
-                ui.heading("Camera Position");
-                ui.label(format!("X: {:.2}", self.camera_pos.x));
-                ui.label(format!("Y: {:.2}", self.camera_pos.y));
-                ui.label(format!("Z: {:.2}", self.camera_pos.z));
-                ui.label(format!("Yaw: {:.1}°", self.camera_yaw.to_degrees()));
-                ui.label(format!("Pitch: {:.1}°", self.camera_pitch.to_degrees()));
-
-                ui.separator();
-
-                // Movement settings
-                ui.heading("Movement Settings");
-                ui.horizontal(|ui| {
-                  ui.label("Speed:");
-                  if ui.small_button("-").clicked() && self.max_speed > 0.5 {
-                    self.max_speed -= 0.5;
-                  }
-                  ui.label(format!("{:.1}", self.max_speed));
-                  if ui.small_button("+").clicked() {
-                    self.max_speed += 0.5;
-                  }
-                });
-
-                ui.horizontal(|ui| {
-                  ui.label("Acceleration:");
-                  if ui.small_button("-").clicked() && self.movement_acceleration > 1.0 {
-                    self.movement_acceleration -= 1.0;
-                  }
-                  ui.label(format!("{:.1}", self.movement_acceleration));
-                  if ui.small_button("+").clicked() {
-                    self.movement_acceleration += 1.0;
-                  }
-                });
-
-                ui.horizontal(|ui| {
-                  ui.label("Deceleration:");
-                  if ui.small_button("-").clicked() && self.movement_deceleration > 1.0 {
-                    self.movement_deceleration -= 1.0;
-                  }
-                  ui.label(format!("{:.1}", self.movement_deceleration));
-                  if ui.small_button("+").clicked() {
-                    self.movement_deceleration += 1.0;
-                  }
-                });
-
-                // Current velocity display
-                ui.label(format!(
-                  "Current Speed: {:.2}",
-                  self.camera_velocity.length()
-                ));
-
-                ui.separator();
-
-                // Rendering settings
-                ui.heading("Rendering");
-                let mut wireframe = self.wireframe_mode;
-                if ui.checkbox(&mut wireframe, "Wireframe Mode").changed() {
-                  self.wireframe_mode = wireframe;
-                  self.needs_pipeline_update = true;
-                }
-
-                if self.wireframe_mode {
-                  if self.supports_wide_lines {
-                    let mut line_width = self.line_width;
-                    if ui
-                      .add(
-                        egui::Slider::new(&mut line_width, 1.0..=self.max_line_width)
-                          .text("Line Width"),
-                      )
-                      .changed()
-                    {
-                      self.line_width = line_width;
-                      self.needs_pipeline_update = true;
-                    }
-                  } else {
-                    ui.label("Wide lines not supported on this device");
-                  }
-                }
-
-                // Add FOV slider
-                ui.horizontal(|ui| {
-                  ui.label("Field of View:");
-                  if ui
-                    .add(egui::Slider::new(&mut self.fov, 30.0..=120.0).step_by(1.0))
-                    .changed()
-                  {
-                    self.needs_pipeline_update = true;
-                  }
-                });
-
-                ui.separator();
-
-                // Controls help
-                ui.heading("Controls");
-                ui.label("WASD - Move horizontally");
-                ui.label("Space/Shift - Move up/down");
-
-                ui.separator();
-
-                // Reset buttons
-                if ui.button("Reset Camera Position").clicked() {
-                  self.camera_pos = DVec3::new(-1.1, 0.1, 1.0);
-                  self.camera_yaw = -std::f64::consts::FRAC_PI_4;
-                  self.camera_pitch = 0.0;
-                  self.camera_velocity = DVec3::ZERO;
-                }
-                if ui.button("Reset Movement Settings").clicked() {
-                  self.max_speed = 2.0;
-                  self.movement_acceleration = 20.0;
-                  self.movement_deceleration = 10.0;
-                }
-              });
-          });
         }
 
         let mut builder = AutoCommandBufferBuilder::primary(
@@ -835,14 +777,6 @@ impl ApplicationHandler for App {
         self.camera_pitch = self
           .camera_pitch
           .clamp(-89.0f64.to_radians(), 89.0f64.to_radians());
-
-        // Update the camera's direction
-        let direction = DVec3::new(
-          self.camera_yaw.cos() * self.camera_pitch.cos(),
-          self.camera_pitch.sin(),
-          self.camera_yaw.sin() * self.camera_pitch.cos(),
-        );
-        self.camera_front = direction.normalize();
       }
     }
   }
@@ -855,3 +789,5 @@ impl ApplicationHandler for App {
     rcx.window.request_redraw();
   }
 }
+
+use crate::gui::{self, GuiState};
