@@ -38,7 +38,6 @@
             vulkan-loader
             vulkan-tools
             wayland
-            valgrind
           ];
         in
           with pkgs; {
@@ -47,8 +46,10 @@
               programs = {
                 alejandra.enable = true;
 
-                rustfmt.enable = true;
-                rustfmt.package = rust;
+                rustfmt = {
+                  enable = true;
+                  rustfmt.package = rust;
+                };
               };
             };
 
@@ -56,9 +57,12 @@
               buildInputs =
                 [
                   alejandra
-                  linuxKernel.packages.linux_xanmod.perf.out
                   rust
                 ]
+                ++ (lib.optional pkgs.hostPlatform.isLinux [
+                  linuxKernel.packages.linux_xanmod.perf.out
+                  valgrind
+                ])
                 ++ deps;
 
               LD_LIBRARY_PATH = "${lib.makeLibraryPath deps}";

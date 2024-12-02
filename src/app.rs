@@ -662,9 +662,9 @@ impl ApplicationHandler for App {
           rcx
             .window
             .set_cursor_grab(
-              #[cfg(not(target_os = "linux"))]
+              #[cfg(target_os = "windows")]
               winit::window::CursorGrabMode::Confined,
-              #[cfg(target_os = "linux")]
+              #[cfg(not(target_os = "windows"))]
               winit::window::CursorGrabMode::Locked,
             )
             .unwrap();
