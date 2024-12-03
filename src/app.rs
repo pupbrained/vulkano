@@ -54,7 +54,7 @@ use winit::{
   dpi::LogicalSize,
   event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
   event_loop::{ActiveEventLoop, EventLoop},
-  window::{Window, WindowId},
+  window::{CursorGrabMode, Window, WindowId},
 };
 
 use crate::{
@@ -661,12 +661,8 @@ impl ApplicationHandler for App {
         if pass_events_to_game {
           rcx
             .window
-            .set_cursor_grab(
-              #[cfg(target_os = "windows")]
-              winit::window::CursorGrabMode::Confined,
-              #[cfg(not(target_os = "windows"))]
-              winit::window::CursorGrabMode::Locked,
-            )
+            .set_cursor_grab(CursorGrabMode::Locked)
+            .or_else(|_e| rcx.window.set_cursor_grab(CursorGrabMode::Confined))
             .unwrap();
           rcx.window.set_cursor_visible(false);
           self.cursor_captured = true;

@@ -57,6 +57,7 @@
               buildInputs =
                 [
                   alejandra
+                  pkg-config
                   rust
                 ]
                 ++ (lib.optional pkgs.hostPlatform.isLinux [
@@ -67,6 +68,11 @@
 
               LD_LIBRARY_PATH = "${lib.makeLibraryPath deps}";
               SHADERC_LIB_DIR = "${pkgs.shaderc.lib}/lib";
+              ${
+                if stdenv.isLinux
+                then "PKG_CONFIG_PATH_FOR_TARGET"
+                else null
+              } = "${systemdMinimal.dev}/lib/pkgconfig";
 
               ${
                 if stdenv.isDarwin
