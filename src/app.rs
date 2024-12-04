@@ -249,6 +249,40 @@ impl App {
   /// # Parameters
   /// * `delta_time` - Time elapsed since last update in seconds
   pub fn update_camera_movement(&mut self, delta_time: f64) {
+    // Handle vertical movement in world space
+    let mut movement = DVec3::ZERO;
+    if self.up_pressed || self.gamepad_up_pressed {
+      movement.y += 1.0;
+    }
+    if self.down_pressed || self.gamepad_down_pressed {
+      movement.y -= 1.0;
+    }
+
+    // Calculate horizontal movement direction based on yaw
+    let (yaw_sin, yaw_cos) = self.camera.yaw.sin_cos();
+
+    // Handle keyboard input - when yaw = 0:
+    // Forward = (1, 0, 0)   // +X direction
+    // Back = (-1, 0, 0)    // -X direction
+    // Left = (0, 0, 1)     // +Z direction
+    // Right = (0, 0, -1)   // -Z direction
+    if self.forward_pressed {
+      movement.x += yaw_cos; // Forward
+      movement.z += yaw_sin;
+    }
+    if self.back_pressed {
+      movement.x -= yaw_cos; // Back
+      movement.z -= yaw_sin;
+    }
+    if self.left_pressed {
+      movement.x -= yaw_sin; // Left
+      movement.z += yaw_cos;
+    }
+    if self.right_pressed {
+      movement.x += yaw_sin; // Right
+      movement.z -= yaw_cos;
+    }
+
     // Process gamepad events if available
     if let Some(gilrs) = &mut self.gilrs {
       while let Some(event) = gilrs.next_event() {
@@ -278,131 +312,61 @@ impl App {
       }
     }
 
-    // Calculate movement vectors
-    let (forward, right) = self.get_movement_vectors();
-
-    // Calculate target velocity based on input (keyboard + gamepad)
-    let mut target_velocity = DVec3::ZERO;
-    let mut using_gamepad = false;
-
-    // Process gamepad input for movement
-    let movement_deadzone = 0.15;
-    let movement_speed = 2.0;
-
-    // Calculate stick vector length for proper analog movement
+    // Add gamepad stick input if no keyboard input
     let stick_length =
       (self.left_stick_x * self.left_stick_x + self.left_stick_y * self.left_stick_y).sqrt();
+    let movement_deadzone = 0.15;
 
-    // Apply left stick for movement with non-linear response curve
-    if stick_length > movement_deadzone {
-      using_gamepad = true;
-      // Normalize the input relative to deadzone to maintain full range
+    if stick_length > movement_deadzone && movement.length_squared() == 0.0 {
+      // Normalize relative to deadzone
       let normalized_length = (stick_length - movement_deadzone) / (1.0 - movement_deadzone);
-      let scale = normalized_length / stick_length; // Scale factor to apply to raw inputs
+      let scale = normalized_length / stick_length;
 
-      // Apply non-linear response curve for finer control
+      // Apply non-linear response curve
       let curve = normalized_length * normalized_length;
 
-      // Scale the raw inputs while preserving direction
-      let scaled_x = self.left_stick_x * scale * curve;
-      let scaled_y = self.left_stick_y * scale * curve;
+      // Transform stick input by camera yaw
+      let stick_x = self.left_stick_x * scale * curve;
+      let stick_y = self.left_stick_y * scale * curve;
 
-      // Add to target velocity with proper analog scaling
-      target_velocity += right * scaled_x * movement_speed;
-      target_velocity -= forward * scaled_y * movement_speed;
+      // Apply same transformation as keyboard movement:
+      // Right (stick_x): (+sin(yaw), 0, -cos(yaw))
+      // Forward (-stick_y): (+cos(yaw), 0, +sin(yaw))
+      movement.x += -stick_y * yaw_cos + stick_x * yaw_sin;
+      movement.z += -stick_y * yaw_sin - stick_x * yaw_cos;
     }
 
-    // Handle keyboard input only if gamepad is not being used
-    if !using_gamepad {
-      if self.forward_pressed {
-        target_velocity += forward;
-      }
-      if self.back_pressed {
-        target_velocity -= forward;
-      }
-      if self.left_pressed {
-        target_velocity -= right;
-      }
-      if self.right_pressed {
-        target_velocity += right;
-      }
-      if self.up_pressed || self.gamepad_up_pressed {
-        target_velocity.y += 1.0;
-      }
-      if self.down_pressed || self.gamepad_down_pressed {
-        target_velocity.y -= 1.0;
-      }
-
-      // Normalize keyboard input direction
-      if target_velocity.length() > 0.0 {
-        target_velocity = target_velocity.normalize();
-      }
+    // Normalize horizontal movement if any
+    if movement.x != 0.0 || movement.z != 0.0 {
+      let horizontal_length = (movement.x * movement.x + movement.z * movement.z).sqrt();
+      movement.x /= horizontal_length;
+      movement.z /= horizontal_length;
     }
 
-    // Update velocity based on input type
-    self.camera.velocity = if target_velocity.length() == 0.0 {
-      // Decelerate when no input
-      let decel = self.camera.velocity.length() * 0.9;
-      if decel < 0.001 {
-        DVec3::ZERO
-      } else {
-        self.camera.velocity.normalize() * decel
-      }
-    } else if using_gamepad {
-      // Direct velocity control for gamepad
-      target_velocity
+    // Update camera movement and rotation
+    self.camera.update_movement(movement, delta_time);
+
+    // Process right stick input with same smoothing as left stick
+    let stick_length = (self.right_stick_x * self.right_stick_x + self.right_stick_y * self.right_stick_y).sqrt();
+    let rotation_deadzone = 0.15;
+
+    let (processed_x, processed_y) = if stick_length > rotation_deadzone {
+      // Normalize relative to deadzone
+      let normalized_length = (stick_length - rotation_deadzone) / (1.0 - rotation_deadzone);
+      let scale = normalized_length / stick_length;
+
+      // Apply non-linear response curve
+      let curve = normalized_length * normalized_length;
+
+      // Scale the input
+      (self.right_stick_x * scale * curve, self.right_stick_y * scale * curve)
     } else {
-      // Accelerated movement for keyboard with proper max speed
-      let target = target_velocity * self.camera.max_speed;
-      let accel_factor = (-self.camera.movement_acceleration * delta_time).exp();
-      target + (self.camera.velocity - target) * accel_factor
+      (0.0, 0.0)
     };
 
-    // Update camera position with delta time
-    let movement = self.camera.velocity * delta_time;
-    if movement.is_finite() {
-      self.camera.position += movement;
-    }
-
-    // Apply right stick for camera rotation with improved sensitivity and smoothing
-    let rotation_deadzone = 0.15;
-    let rotation_sensitivity = self.camera.mouse_sensitivity * 2.0;
-
-    if self.right_stick_x.abs() > rotation_deadzone || self.right_stick_y.abs() > rotation_deadzone
-    {
-      // Apply non-linear response curve for finer control
-      let process_input = |input: f64| -> f64 {
-        if input.abs() <= rotation_deadzone {
-          0.0
-        } else {
-          let normalized = (input.abs() - rotation_deadzone) / (1.0 - rotation_deadzone);
-          let curve = normalized * normalized;
-          curve * input.signum()
-        }
-      };
-
-      let yaw_delta = process_input(self.right_stick_x);
-      let pitch_delta = process_input(self.right_stick_y);
-
-      self.camera.rotate(
-        yaw_delta * rotation_sensitivity,
-        pitch_delta * rotation_sensitivity,
-      );
-    }
-  }
-
-  fn get_movement_vectors(&self) -> (DVec3, DVec3) {
-    let forward = DVec3::new(self.camera.yaw.cos(), 0.0, self.camera.yaw.sin()).normalize();
-    if !forward.is_finite() {
-      return (DVec3::ZERO, DVec3::ZERO);
-    }
-
-    let right = DVec3::Y.cross(forward).normalize();
-    if !right.is_finite() {
-      return (DVec3::ZERO, DVec3::ZERO);
-    }
-
-    (forward, right)
+    self
+      .camera
+      .update_gamepad_rotation(processed_x, processed_y);
   }
 }
 
@@ -957,6 +921,13 @@ impl ApplicationHandler for App {
   ///
   /// Only processes mouse motion events when the cursor is captured
   /// to prevent unwanted camera movement during GUI interaction.
+  ///
+  /// Input processing includes:
+  /// * WASD keys for camera movement
+  /// * Space/Shift for vertical movement
+  /// * Escape to toggle cursor capture
+  /// * Mouse movement for camera rotation
+  /// * Mouse buttons for GUI interaction
   ///
   /// # Parameters
   /// * `event_loop` - Active event loop reference

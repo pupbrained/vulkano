@@ -101,60 +101,34 @@ impl Camera {
     }
   }
 
-  /// Updates the camera's movement based on current velocity and input.
-  ///
-  /// This method implements a physics-based movement system with the following features:
-  /// * Acceleration when movement input is present
-  /// * Deceleration when no input is present (friction)
-  /// * Maximum speed limiting
-  /// * Frame-rate independent movement using delta time
-  ///
-  /// The movement input is expected to be a normalized direction vector where:
-  /// * X: Positive = Right, Negative = Left
-  /// * Y: Positive = Up, Negative = Down
-  /// * Z: Positive = Backward, Negative = Forward
+  /// Updates camera position based on velocity and movement input
   ///
   /// # Parameters
+  /// * `movement_input` - Movement input vector in world space
   /// * `delta_time` - Time elapsed since last update in seconds
-  ///
-  /// # Example
-  /// ```
-  /// use vulkano_app::Camera;
-  /// use glam::DVec3;
-  ///
-  /// let mut camera = Camera::new();
-  ///
-  /// // Move forward
-  /// camera.movement_input = DVec3::new(0.0, 0.0, -1.0);
-  /// camera.update_movement(0.016);
-  ///
-  /// // Stop moving (will decelerate)
-  /// camera.movement_input = DVec3::ZERO;
-  /// camera.update_movement(0.016);
-  /// ```
-  pub fn update_movement(&mut self, delta_time: f64) {
-    // Apply acceleration based on input
-    let acceleration = self.movement_input * self.movement_acceleration;
-    self.velocity += acceleration * delta_time;
+  pub fn update_movement(&mut self, movement_input: DVec3, delta_time: f64) {
+    // Update velocity based on input
+    let target_velocity = if movement_input.length_squared() > 0.0 {
+      movement_input * self.max_speed
+    } else {
+      DVec3::ZERO
+    };
 
-    // Apply deceleration when no input
-    if self.movement_input.length_squared() < 0.1 {
-      let deceleration = -self.velocity.normalize_or_zero() * self.movement_deceleration;
-      self.velocity += deceleration * delta_time;
+    // Apply acceleration/deceleration
+    let accel = if movement_input.length_squared() > 0.0 {
+      self.movement_acceleration
+    } else {
+      self.movement_deceleration
+    };
 
-      // Stop completely if velocity is very small
-      if self.velocity.length_squared() < 0.01 {
-        self.velocity = DVec3::ZERO;
-      }
+    // Update velocity with acceleration
+    self.velocity = self.velocity.lerp(target_velocity, accel * delta_time);
+
+    // Apply movement if velocity is non-zero
+    if self.velocity.length_squared() > 0.0 {
+      let movement = self.velocity * delta_time;
+      self.position += movement;
     }
-
-    // Clamp velocity to max speed
-    if self.velocity.length_squared() > self.max_speed * self.max_speed {
-      self.velocity = self.velocity.normalize() * self.max_speed;
-    }
-
-    // Update position
-    self.position += self.velocity * delta_time;
   }
 
   /// Rotates the camera by the given yaw and pitch deltas.
@@ -170,7 +144,7 @@ impl Camera {
   pub fn rotate(&mut self, yaw_delta: f64, pitch_delta: f64) {
     // Update yaw and normalize to [-π, π]
     self.yaw += yaw_delta;
-    
+
     // Normalize yaw to [-π, π] range
     let two_pi = 2.0 * std::f64::consts::PI;
     self.yaw = self.yaw - (two_pi * (self.yaw / two_pi).floor());
@@ -180,20 +154,35 @@ impl Camera {
 
     // Update pitch with clamping
     self.pitch += pitch_delta;
-    self.pitch = self.pitch.clamp(
-      -89.0f64.to_radians(),
-      89.0f64.to_radians()
-    );
+    self.pitch = self
+      .pitch
+      .clamp(-89.0f64.to_radians(), 89.0f64.to_radians());
 
     // Update front vector
     let (yaw_sin, yaw_cos) = self.yaw.sin_cos();
     let (pitch_sin, pitch_cos) = self.pitch.sin_cos();
-    
-    self.front = DVec3::new(
-      yaw_cos * pitch_cos,
-      pitch_sin,
-      yaw_sin * pitch_cos,
-    ).normalize();
+
+    self.front = DVec3::new(yaw_cos * pitch_cos, pitch_sin, yaw_sin * pitch_cos).normalize();
+  }
+
+  /// Updates camera rotation based on gamepad right stick input
+  ///
+  /// Applies a non-linear response curve and deadzone for smooth control
+  ///
+  /// # Parameters
+  /// * `right_stick_x` - X-axis input from gamepad's right stick (-1.0 to 1.0)
+  /// * `right_stick_y` - Y-axis input from gamepad's right stick (-1.0 to 1.0)
+  pub fn update_gamepad_rotation(&mut self, right_stick_x: f64, right_stick_y: f64) {
+    // Apply right stick for camera rotation with improved sensitivity
+    let rotation_sensitivity = self.mouse_sensitivity * 0.5;
+
+    // Right stick values are already processed with deadzone and curve
+    if right_stick_x != 0.0 || right_stick_y != 0.0 {
+      self.rotate(
+        -right_stick_x * rotation_sensitivity,
+        -right_stick_y * rotation_sensitivity,
+      );
+    }
   }
 
   /// Computes the view matrix for the camera's current position and orientation.
