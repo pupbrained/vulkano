@@ -1,73 +1,97 @@
+//! GUI Implementation using egui
+//!
+//! This module implements the application's graphical user interface using egui.
+//! It provides real-time statistics, rendering options, and camera controls.
+
 use std::time::Instant;
 
 use egui_winit_vulkano::Gui;
 
 use crate::Camera;
 
+/// Stores the current state of the GUI including performance metrics and rendering options
 #[derive(Clone, Copy)]
 pub struct GuiState {
-  pub fps: f32,
-  pub avg_fps: f32,
-  pub frame_count: u32,
+  /// Current frames per second
+  pub fps:                    f32,
+  /// Average frames per second over time
+  pub avg_fps:                f32,
+  /// Total number of frames rendered
+  pub frame_count:            u32,
+  /// Accumulated frame times for averaging
   pub frame_time_accumulator: f32,
-  pub last_frame_time: Instant,
-  pub last_avg_update: Instant,
-  pub needs_pipeline_update: bool,
-  pub wireframe_mode: bool,
-  pub line_width: f32,
-  pub max_line_width: f32,
-  pub supports_wide_lines: bool,
-  pub fov: f32,
+  /// Timestamp of the last frame
+  pub last_frame_time:        Instant,
+  /// Timestamp of last FPS average calculation
+  pub last_avg_update:        Instant,
+  /// Flag indicating if the rendering pipeline needs to be rebuilt
+  pub needs_pipeline_update:  bool,
+  /// Toggle for wireframe rendering mode
+  pub wireframe_mode:         bool,
+  /// Current line width for wireframe rendering
+  pub line_width:             f32,
+  /// Maximum supported line width by the GPU
+  pub max_line_width:         f32,
+  /// Whether the GPU supports wide lines
+  pub supports_wide_lines:    bool,
+  /// Field of view in degrees
+  pub fov:                    f32,
 }
 
 impl Default for GuiState {
+  /// Creates a default `GuiState` instance with initial values
   fn default() -> Self {
     Self {
-      fps: 0.0,
-      avg_fps: 0.0,
-      frame_count: 0,
+      fps:                    0.0,
+      avg_fps:                0.0,
+      frame_count:            0,
       frame_time_accumulator: 0.0,
-      last_frame_time: Instant::now(),
-      last_avg_update: Instant::now(),
-      needs_pipeline_update: false,
-      wireframe_mode: false,
-      line_width: 1.0,
-      max_line_width: 1.0,
-      supports_wide_lines: false,
-      fov: 90.0,
+      last_frame_time:        Instant::now(),
+      last_avg_update:        Instant::now(),
+      needs_pipeline_update:  false,
+      wireframe_mode:         false,
+      line_width:             1.0,
+      max_line_width:         1.0,
+      supports_wide_lines:    false,
+      fov:                    90.0,
     }
   }
 }
 
 /// Represents changes made by the GUI that need to be synced back to the App
+#[derive(Default)]
 pub struct GuiStateChanges {
-  pub wireframe_mode: Option<bool>,
-  pub line_width: Option<f32>,
-  pub fov: Option<f32>,
-  pub camera_reset: bool,
-  pub movement_reset: bool,
-  pub pass_events_to_game: bool,
-  pub max_speed: Option<f64>,
+  /// Whether the rendering pipeline needs to be rebuilt
+  pub rebuild_pipeline:      bool,
+  /// New wireframe rendering state
+  pub wireframe_mode:        Option<bool>,
+  /// New line width for wireframe rendering
+  pub line_width:            Option<f32>,
+  /// New field of view setting
+  pub fov:                   Option<f32>,
+  /// Flag to reset camera position
+  pub camera_reset:          bool,
+  /// Flag to reset movement settings
+  pub movement_reset:        bool,
+  /// Flag to pass events to the game
+  pub pass_events_to_game:   bool,
+  /// New maximum speed setting
+  pub max_speed:             Option<f64>,
+  /// New movement acceleration setting
   pub movement_acceleration: Option<f64>,
+  /// New movement deceleration setting
   pub movement_deceleration: Option<f64>,
 }
 
-impl Default for GuiStateChanges {
-  fn default() -> Self {
-    Self {
-      wireframe_mode: None,
-      line_width: None,
-      fov: None,
-      camera_reset: false,
-      movement_reset: false,
-      pass_events_to_game: true,
-      max_speed: None,
-      movement_acceleration: None,
-      movement_deceleration: None,
-    }
-  }
-}
-
+/// Draws the GUI frame and handles user interactions
+///
+/// # Arguments
+/// * `gui` - The egui context
+/// * `state` - Current GUI state
+/// * `camera` - Camera controller for view manipulation
+///
+/// # Returns
+/// A `GuiStateChanges` struct containing any modifications made through the GUI
 pub fn draw_gui(gui: &mut Gui, state: &mut GuiState, camera: &mut Camera) -> GuiStateChanges {
   let mut changes = GuiStateChanges::default();
 

@@ -25,10 +25,10 @@ use crate::render::vertex::{Normal, Position, TexCoord};
 /// * tex_coords: `[u, v, u, v, ...]` - 2 floats per vertex
 /// * indices: `[i1, i2, i3, i1, i2, i3, ...]` - 3 u32s per triangle
 pub struct VikingRoomModelBuffers {
-  pub positions: Subbuffer<[Position]>,
-  pub normals: Subbuffer<[Normal]>,
+  pub positions:  Subbuffer<[Position]>,
+  pub normals:    Subbuffer<[Normal]>,
   pub tex_coords: Subbuffer<[TexCoord]>,
-  pub indices: Subbuffer<[u32]>,
+  pub indices:    Subbuffer<[u32]>,
 }
 
 /// Loads the Viking Room 3D model from an OBJ file and creates GPU buffers for rendering.

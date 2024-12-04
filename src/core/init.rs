@@ -1,3 +1,12 @@
+//! Vulkan initialization and resource management.
+//!
+//! This module handles the initialization of Vulkan resources including:
+//! * Instance creation with validation layers
+//! * Physical device selection with feature requirements
+//! * Logical device and queue creation
+//! * Memory allocators and resource pools
+//! * Surface creation and swapchain setup
+
 use std::sync::Arc;
 
 use vulkano::{
@@ -16,7 +25,7 @@ use vulkano::{
   },
   descriptor_set::allocator::StandardDescriptorSetAllocator,
   device::{
-    physical::PhysicalDeviceType,
+    physical::{PhysicalDevice, PhysicalDeviceType},
     Device,
     DeviceCreateInfo,
     DeviceExtensions,
@@ -44,21 +53,58 @@ use winit::event_loop::EventLoop;
 
 use crate::render::model::{load_viking_room_model, VikingRoomModelBuffers};
 
+/// Contains all initialized Vulkan resources required by the application
 pub struct InitializedVulkan {
-  pub instance: Arc<Instance>,
-  pub device: Arc<Device>,
-  pub queue: Arc<Queue>,
-  pub memory_allocator: Arc<StandardMemoryAllocator>,
-  pub descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+  /// Vulkan instance with validation layers
+  pub instance:                 Arc<Instance>,
+  /// Selected physical device (GPU)
+  pub physical_device:          Arc<PhysicalDevice>,
+  /// Logical device with enabled features
+  pub device:                   Arc<Device>,
+  /// Graphics queue for command submission
+  pub graphics_queue:           Arc<Queue>,
+  /// Memory allocator for buffers and images
+  pub memory_allocator:         Arc<StandardMemoryAllocator>,
+  /// Command buffer allocator
   pub command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-  pub model_buffers: VikingRoomModelBuffers,
+  /// Descriptor set allocator
+  pub descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+  /// Model buffers
+  pub model_buffers:            VikingRoomModelBuffers,
+  /// Uniform buffer allocator
   pub uniform_buffer_allocator: SubbufferAllocator,
-  pub texture: Arc<ImageView>,
-  pub sampler: Arc<Sampler>,
-  pub max_line_width: f32,
-  pub supports_wide_lines: bool,
+  /// Texture
+  pub texture:                  Arc<ImageView>,
+  /// Sampler
+  pub sampler:                  Arc<Sampler>,
+  /// Maximum line width
+  pub max_line_width:           f32,
+  /// Wide lines support
+  pub supports_wide_lines:      bool,
 }
 
+/// Initializes all required Vulkan resources
+///
+/// This function performs the complete Vulkan initialization sequence:
+/// 1. Creates Vulkan instance with validation layers (in debug builds)
+/// 2. Selects the most suitable physical device (GPU) that supports:
+///    * Graphics and compute operations
+///    * Presentation capabilities
+///    * Required device features (geometry shaders, wide lines)
+/// 3. Creates logical device and command queues
+/// 4. Sets up memory allocators and descriptor pools
+/// 5. Creates the window surface for presentation
+///
+/// # Arguments
+/// * `event_loop` - The winit event loop to create the window surface for
+///
+/// # Returns
+/// A struct containing all initialized Vulkan resources
+///
+/// # Panics
+/// * If no suitable Vulkan device is found
+/// * If required device features are not available
+/// * If window surface creation fails
 pub fn initialize_vulkan(event_loop: &EventLoop<()>) -> InitializedVulkan {
   let library = VulkanLibrary::new().unwrap();
   let required_extensions = Surface::required_extensions(event_loop).unwrap();
@@ -142,7 +188,7 @@ pub fn initialize_vulkan(event_loop: &EventLoop<()>) -> InitializedVulkan {
   println!("Wide lines support: {}", supports_wide_lines);
   println!("Maximum line width: {:.1}", max_line_width);
 
-  let queue = queues.next().unwrap();
+  let graphics_queue = queues.next().unwrap();
 
   let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
   let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
@@ -206,7 +252,7 @@ pub fn initialize_vulkan(event_loop: &EventLoop<()>) -> InitializedVulkan {
   // Create command buffer for texture upload
   let mut texture_upload = AutoCommandBufferBuilder::primary(
     command_buffer_allocator.clone(),
-    queue.queue_family_index(),
+    graphics_queue.queue_family_index(),
     CommandBufferUsage::OneTimeSubmit,
   )
   .unwrap();
@@ -217,7 +263,7 @@ pub fn initialize_vulkan(event_loop: &EventLoop<()>) -> InitializedVulkan {
 
   let texture_upload = texture_upload.build().unwrap();
   texture_upload
-    .execute(queue.clone())
+    .execute(graphics_queue.clone())
     .unwrap()
     .then_signal_fence_and_flush()
     .unwrap()
@@ -237,8 +283,9 @@ pub fn initialize_vulkan(event_loop: &EventLoop<()>) -> InitializedVulkan {
 
   InitializedVulkan {
     instance,
+    physical_device,
     device,
-    queue,
+    graphics_queue,
     memory_allocator,
     descriptor_set_allocator,
     command_buffer_allocator,

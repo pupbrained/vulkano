@@ -1,5 +1,7 @@
+enum_discrim_align_threshold = 20
 group_imports = "StdExternalCrate"
 imports_granularity = "Crate"
 imports_layout = "HorizontalVertical"
-tab_spaces = 2
+struct_field_align_threshold = 20
 struct_lit_width = 10
+tab_spaces = 2

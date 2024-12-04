@@ -1,3 +1,29 @@
+//! Camera system with physics-based movement.
+//!
+//! This module implements a 3D camera system with smooth movement and rotation controls.
+//! Features include:
+//! * Position and orientation tracking with 64-bit precision
+//! * Physics-based movement with acceleration and deceleration
+//! * Configurable field of view (FOV)
+//! * View matrix generation for rendering
+//! * Smooth mouse-look controls
+//!
+//! # Example
+//! ```
+//! use vulkano_app::render::camera::Camera;
+//! use glam::DVec3;
+//!
+//! let mut camera = Camera::new();
+//!
+//! // Set initial position and orientation
+//! camera.position = DVec3::new(0.0, 1.0, -5.0);
+//! camera.yaw = std::f64::consts::FRAC_PI_4;  // 45 degrees right
+//!
+//! // Move camera forward
+//! camera.movement_input = DVec3::new(0.0, 0.0, -1.0);
+//! camera.update_movement(0.016);  // Update with 16ms frame time
+//! ```
+
 use glam::{DMat4, DVec3};
 
 /// A 3D camera with smooth movement and rotation controls.
@@ -14,6 +40,9 @@ use glam::{DMat4, DVec3};
 ///
 /// # Example
 /// ```
+/// use vulkano_app::Camera;
+/// use glam::DVec3;
+///
 /// let mut camera = Camera::new();
 ///
 /// // Update camera position
@@ -26,29 +55,30 @@ use glam::{DMat4, DVec3};
 /// camera.movement_input = DVec3::new(0.0, 0.0, -1.0);
 /// camera.update_movement(0.016); // Update with 16ms frame time
 /// ```
+#[derive(Debug)]
 pub struct Camera {
   /// Current position in 3D space
-  pub position: DVec3,
+  pub position:              DVec3,
   /// Horizontal rotation angle in degrees
-  pub yaw: f64,
+  pub yaw:                   f64,
   /// Vertical rotation angle in degrees
-  pub pitch: f64,
+  pub pitch:                 f64,
   /// Direction the camera is facing
-  pub front: DVec3,
+  pub front:                 DVec3,
   /// Current movement velocity
-  pub velocity: DVec3,
+  pub velocity:              DVec3,
   /// Rate of acceleration when movement input is received
   pub movement_acceleration: f64,
   /// Rate of deceleration when no movement input is present
   pub movement_deceleration: f64,
   /// Maximum movement speed
-  pub max_speed: f64,
+  pub max_speed:             f64,
   /// Current movement input vector
-  pub movement_input: DVec3,
+  pub movement_input:        DVec3,
   /// Field of view in degrees
-  pub fov: f32,
+  pub fov:                   f32,
   /// Mouse/Gamepad look sensitivity
-  pub mouse_sensitivity: f64,
+  pub mouse_sensitivity:     f64,
 }
 
 impl Camera {
@@ -57,17 +87,17 @@ impl Camera {
   /// Initial position is set to (-1.1, 0.1, 1.0) with the camera facing diagonally (-45° yaw).
   pub fn new() -> Self {
     Self {
-      position: DVec3::new(-1.1, 0.1, 1.0),
-      yaw: -std::f64::consts::FRAC_PI_4, // -45 degrees
-      pitch: 0.0,
-      front: DVec3::new(0.0, 0.0, -1.0),
-      velocity: DVec3::ZERO,
+      position:              DVec3::new(-1.1, 0.1, 1.0),
+      yaw:                   -std::f64::consts::FRAC_PI_4, // -45 degrees
+      pitch:                 0.0,
+      front:                 DVec3::new(0.0, 0.0, -1.0),
+      velocity:              DVec3::ZERO,
       movement_acceleration: 20.0,
       movement_deceleration: 10.0,
-      max_speed: 2.0,
-      movement_input: DVec3::ZERO,
-      fov: 45.0,
-      mouse_sensitivity: 0.005,
+      max_speed:             2.0,
+      movement_input:        DVec3::ZERO,
+      fov:                   45.0,
+      mouse_sensitivity:     0.005,
     }
   }
 
@@ -89,6 +119,9 @@ impl Camera {
   ///
   /// # Example
   /// ```
+  /// use vulkano_app::Camera;
+  /// use glam::DVec3;
+  ///
   /// let mut camera = Camera::new();
   ///
   /// // Move forward
@@ -122,6 +155,45 @@ impl Camera {
 
     // Update position
     self.position += self.velocity * delta_time;
+  }
+
+  /// Rotates the camera by the given yaw and pitch deltas.
+  ///
+  /// This method handles all camera rotation, including:
+  /// * Yaw (horizontal) rotation with proper wrapping around ±π
+  /// * Pitch (vertical) rotation with clamping to prevent flipping
+  /// * Automatic front vector updates
+  ///
+  /// # Parameters
+  /// * `yaw_delta` - Change in horizontal rotation (negative = left, positive = right)
+  /// * `pitch_delta` - Change in vertical rotation (negative = up, positive = down)
+  pub fn rotate(&mut self, yaw_delta: f64, pitch_delta: f64) {
+    // Update yaw and normalize to [-π, π]
+    self.yaw += yaw_delta;
+    
+    // Normalize yaw to [-π, π] range
+    let two_pi = 2.0 * std::f64::consts::PI;
+    self.yaw = self.yaw - (two_pi * (self.yaw / two_pi).floor());
+    if self.yaw > std::f64::consts::PI {
+      self.yaw -= two_pi;
+    }
+
+    // Update pitch with clamping
+    self.pitch += pitch_delta;
+    self.pitch = self.pitch.clamp(
+      -89.0f64.to_radians(),
+      89.0f64.to_radians()
+    );
+
+    // Update front vector
+    let (yaw_sin, yaw_cos) = self.yaw.sin_cos();
+    let (pitch_sin, pitch_cos) = self.pitch.sin_cos();
+    
+    self.front = DVec3::new(
+      yaw_cos * pitch_cos,
+      pitch_sin,
+      yaw_sin * pitch_cos,
+    ).normalize();
   }
 
   /// Computes the view matrix for the camera's current position and orientation.

@@ -68,6 +68,8 @@ use crate::render::vertex::{Normal, Position, TexCoord};
 ///
 /// # Example
 /// ```
+/// use vulkano_app::RenderContext;
+///
 /// let context = RenderContext {
 ///     window: window.clone(),
 ///     swapchain: swapchain.clone(),
@@ -82,23 +84,23 @@ use crate::render::vertex::{Normal, Position, TexCoord};
 /// ```
 pub struct RenderContext {
   /// The window being rendered to
-  pub window: Arc<Window>,
+  pub window:                Arc<Window>,
   /// Vulkan swapchain for presenting rendered images
-  pub swapchain: Arc<Swapchain>,
+  pub swapchain:             Arc<Swapchain>,
   /// Render pass defining the rendering operations
-  pub render_pass: Arc<RenderPass>,
+  pub render_pass:           Arc<RenderPass>,
   /// Framebuffers for each swapchain image
-  pub framebuffers: Vec<Arc<Framebuffer>>,
+  pub framebuffers:          Vec<Arc<Framebuffer>>,
   /// Compiled vertex shader
-  pub vs: EntryPoint,
+  pub vs:                    EntryPoint,
   /// Compiled fragment shader
-  pub fs: EntryPoint,
+  pub fs:                    EntryPoint,
   /// Graphics pipeline containing all render state
-  pub pipeline: Arc<GraphicsPipeline>,
+  pub pipeline:              Arc<GraphicsPipeline>,
   /// Flag indicating if swapchain needs recreation
-  pub recreate_swapchain: bool,
+  pub recreate_swapchain:    bool,
   /// Synchronization primitive for frame rendering
-  pub previous_frame_end: Option<Box<dyn GpuFuture>>,
+  pub previous_frame_end:    Option<Box<dyn GpuFuture>>,
   /// Views into the swapchain images
   pub swapchain_image_views: Vec<Arc<ImageView>>,
 }
@@ -117,21 +119,21 @@ pub struct RenderContext {
 #[derive(Clone)]
 pub struct WindowSizeSetupConfig<'a> {
   /// Current window dimensions
-  pub window_size: PhysicalSize<u32>,
+  pub window_size:      PhysicalSize<u32>,
   /// Swapchain images
-  pub images: &'a [Arc<Image>],
+  pub images:           &'a [Arc<Image>],
   /// Render pass to create framebuffers for
-  pub render_pass: &'a Arc<RenderPass>,
+  pub render_pass:      &'a Arc<RenderPass>,
   /// Memory allocator for creating new resources
   pub memory_allocator: &'a Arc<StandardMemoryAllocator>,
   /// Vertex shader to use in pipeline
-  pub vertex_shader: &'a EntryPoint,
+  pub vertex_shader:    &'a EntryPoint,
   /// Fragment shader to use in pipeline
-  pub fragment_shader: &'a EntryPoint,
+  pub fragment_shader:  &'a EntryPoint,
   /// Flag to enable wireframe rendering
-  pub wireframe_mode: bool,
+  pub wireframe_mode:   bool,
   /// Line width for wireframe rendering
-  pub line_width: f32,
+  pub line_width:       f32,
 }
 
 /// Creates or recreates window size dependent resources.
@@ -276,8 +278,8 @@ pub fn window_size_dependent_setup(
         input_assembly_state: Some(InputAssemblyState::default()),
         viewport_state: Some(ViewportState {
           viewports: [Viewport {
-            offset: [0.0, 0.0],
-            extent: config.window_size.into(),
+            offset:      [0.0, 0.0],
+            extent:      config.window_size.into(),
             depth_range: 0.0..=1.0,
           }]
           .into_iter()
@@ -310,10 +312,10 @@ pub fn window_size_dependent_setup(
                 vulkano::pipeline::graphics::color_blend::BlendFactor::SrcAlpha,
               dst_color_blend_factor:
                 vulkano::pipeline::graphics::color_blend::BlendFactor::OneMinusSrcAlpha,
-              color_blend_op: vulkano::pipeline::graphics::color_blend::BlendOp::Add,
+              color_blend_op:         vulkano::pipeline::graphics::color_blend::BlendOp::Add,
               src_alpha_blend_factor: vulkano::pipeline::graphics::color_blend::BlendFactor::One,
               dst_alpha_blend_factor: vulkano::pipeline::graphics::color_blend::BlendFactor::Zero,
-              alpha_blend_op: vulkano::pipeline::graphics::color_blend::BlendOp::Add,
+              alpha_blend_op:         vulkano::pipeline::graphics::color_blend::BlendOp::Add,
             }),
             color_write_mask: vulkano::pipeline::graphics::color_blend::ColorComponents::all(),
             ..Default::default()

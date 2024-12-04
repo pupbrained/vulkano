@@ -93,26 +93,29 @@ use crate::{
 ///
 /// # Example Usage
 /// ```
-/// let event_loop = EventLoop::new();
-/// let app = App::new(&event_loop);
-/// event_loop.run(app); // Starts the main application loop
+/// use winit::event_loop::EventLoop;
+/// use vulkano_app::App;
+///
+/// let event_loop = EventLoop::new().expect("Failed to create event loop");
+/// let mut app = App::new(&event_loop);
+/// event_loop.run_app(&mut app); // Starts the main application loop
 /// ```
 pub struct App {
   // Vulkan resources
-  instance: Arc<Instance>,
-  device: Arc<Device>,
-  queue: Arc<Queue>,
-  memory_allocator: Arc<StandardMemoryAllocator>,
+  instance:                 Arc<Instance>,
+  device:                   Arc<Device>,
+  queue:                    Arc<Queue>,
+  memory_allocator:         Arc<StandardMemoryAllocator>,
   descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
   command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-  model_buffers: VikingRoomModelBuffers,
   uniform_buffer_allocator: SubbufferAllocator,
-  texture: Arc<ImageView>,
-  sampler: Arc<Sampler>,
+  model_buffers:            VikingRoomModelBuffers,
+  texture:                  Arc<ImageView>,
+  sampler:                  Arc<Sampler>,
 
   // Rendering context and UI
-  rcx: Option<RenderContext>,
-  gui: Option<Gui>,
+  rcx:       Option<RenderContext>,
+  gui:       Option<Gui>,
   gui_state: GuiState,
 
   // Performance monitoring
@@ -123,26 +126,26 @@ pub struct App {
 
   // Input state
   forward_pressed: bool,
-  back_pressed: bool,
-  left_pressed: bool,
-  right_pressed: bool,
-  up_pressed: bool,
-  down_pressed: bool,
+  back_pressed:    bool,
+  left_pressed:    bool,
+  right_pressed:   bool,
+  up_pressed:      bool,
+  down_pressed:    bool,
 
   // Rendering settings
-  wireframe_mode: bool,
-  line_width: f32,
+  wireframe_mode:        bool,
+  line_width:            f32,
   needs_pipeline_update: bool,
-  cursor_captured: bool,
-  fov: f32, // Field of View in degrees
+  cursor_captured:       bool,
+  fov:                   f32,
 
   // Gamepad state
-  gilrs: Option<Gilrs>,
-  left_stick_x: f64,
-  left_stick_y: f64,
-  right_stick_x: f64,
-  right_stick_y: f64,
-  gamepad_up_pressed: bool,   // A button state
+  gilrs:                Option<Gilrs>,
+  left_stick_x:         f64,
+  left_stick_y:         f64,
+  right_stick_x:        f64,
+  right_stick_y:        f64,
+  gamepad_up_pressed:   bool, // A button state
   gamepad_down_pressed: bool, // B button state
 }
 
@@ -176,20 +179,10 @@ impl App {
   pub fn new(event_loop: &EventLoop<()>) -> Self {
     let initialized = initialize_vulkan(event_loop);
 
-    fn default_gilrs() -> Option<Gilrs> {
-      match Gilrs::new() {
-        Ok(gilrs) => Some(gilrs),
-        Err(e) => {
-          eprintln!("Failed to initialize gamepad support: {}", e);
-          None
-        }
-      }
-    }
-
     App {
       instance: initialized.instance,
       device: initialized.device,
-      queue: initialized.queue,
+      queue: initialized.graphics_queue,
       memory_allocator: initialized.memory_allocator.clone(),
       descriptor_set_allocator: initialized.descriptor_set_allocator.clone(),
       command_buffer_allocator: initialized.command_buffer_allocator.clone(),
@@ -221,7 +214,13 @@ impl App {
       cursor_captured: false,
       fov: 90.0, // Default 90 degree FOV
       // Gamepad state
-      gilrs: default_gilrs(),
+      gilrs: match Gilrs::new() {
+        Ok(gilrs) => Some(gilrs),
+        Err(e) => {
+          eprintln!("Failed to initialize gamepad support: {}", e);
+          None
+        }
+      },
       left_stick_x: 0.0,
       left_stick_y: 0.0,
       right_stick_x: 0.0,
@@ -366,43 +365,30 @@ impl App {
     }
 
     // Apply right stick for camera rotation with improved sensitivity and smoothing
-    let rotation_speed = 10.0; // Increased back to original speed now that wrapping is fixed
-    let deadzone = 0.15;
+    let rotation_deadzone = 0.15;
+    let rotation_sensitivity = self.camera.mouse_sensitivity * 2.0;
 
-    if self.right_stick_x.abs() > deadzone {
+    if self.right_stick_x.abs() > rotation_deadzone || self.right_stick_y.abs() > rotation_deadzone
+    {
       // Apply non-linear response curve for finer control
-      let normalized_x = (self.right_stick_x.abs() - deadzone) / (1.0 - deadzone);
-      let curve_x = normalized_x * normalized_x * 0.5;
-      // Invert X-axis for correct rotation direction
-      self.camera.yaw -= self.right_stick_x.signum() * curve_x * rotation_speed * delta_time;
+      let process_input = |input: f64| -> f64 {
+        if input.abs() <= rotation_deadzone {
+          0.0
+        } else {
+          let normalized = (input.abs() - rotation_deadzone) / (1.0 - rotation_deadzone);
+          let curve = normalized * normalized;
+          curve * input.signum()
+        }
+      };
 
-      // Normalize yaw to keep it within [-π, π] without causing visual changes
-      // This prevents the value from growing too large while maintaining smooth rotation
-      self.camera.yaw = ((self.camera.yaw + std::f64::consts::PI) % (std::f64::consts::PI * 2.0))
-        - std::f64::consts::PI;
-    }
+      let yaw_delta = process_input(self.right_stick_x);
+      let pitch_delta = process_input(self.right_stick_y);
 
-    if self.right_stick_y.abs() > deadzone {
-      // Apply non-linear response curve for finer control
-      let normalized_y = (self.right_stick_y.abs() - deadzone) / (1.0 - deadzone);
-      let curve_y = normalized_y * normalized_y * 0.5;
-      // Invert Y-axis for correct rotation direction
-      self.camera.pitch -= self.right_stick_y.signum() * curve_y * rotation_speed * delta_time;
-
-      // Clamp pitch to prevent camera flipping
-      self.camera.pitch = self.camera.pitch.clamp(
-        -std::f64::consts::FRAC_PI_2 + 0.1, // Just above -90 degrees
-        std::f64::consts::FRAC_PI_2 - 0.1,  // Just below 90 degrees
+      self.camera.rotate(
+        yaw_delta * rotation_sensitivity,
+        pitch_delta * rotation_sensitivity,
       );
     }
-
-    // Update camera front vector based on yaw and pitch
-    self.camera.front = DVec3::new(
-      self.camera.yaw.cos() * self.camera.pitch.cos(),
-      self.camera.pitch.sin(),
-      self.camera.yaw.sin() * self.camera.pitch.cos(),
-    )
-    .normalize();
   }
 
   fn get_movement_vectors(&self) -> (DVec3, DVec3) {
@@ -861,10 +847,10 @@ impl ApplicationHandler for App {
             world: DMat4::from_mat3(initial_rotation)
               .to_cols_array_2d()
               .map(|row| row.map(|val| val as f32)),
-            view: (view * scale)
+            view:  (view * scale)
               .to_cols_array_2d()
               .map(|row| row.map(|val| val as f32)),
-            proj: proj.to_cols_array_2d(),
+            proj:  proj.to_cols_array_2d(),
           };
 
           let buffer = self.uniform_buffer_allocator.allocate_sized().unwrap();
@@ -984,16 +970,12 @@ impl ApplicationHandler for App {
   ) {
     if let DeviceEvent::MouseMotion { delta } = event {
       if self.cursor_captured {
-        let sensitivity = 0.005;
         let (delta_x, delta_y) = delta;
+        let sensitivity = self.camera.mouse_sensitivity;
 
-        self.camera.yaw -= delta_x * sensitivity; // Inverted horizontal movement
-        self.camera.pitch -= delta_y * sensitivity;
-        // Clamp the pitch to prevent flipping
-        self.camera.pitch = self
+        self
           .camera
-          .pitch
-          .clamp(-89.0f64.to_radians(), 89.0f64.to_radians());
+          .rotate(-delta_x * sensitivity, -delta_y * sensitivity);
       }
     }
   }
