@@ -28,24 +28,24 @@ use egui_winit_vulkano::{Gui, GuiConfig};
 use gilrs::{Axis, Button, Gilrs};
 use glam::{DMat3, DMat4, DVec3, Mat4};
 use vulkano::{
+  Validated,
+  VulkanError,
   buffer::allocator::SubbufferAllocator,
   command_buffer::{
-    allocator::StandardCommandBufferAllocator,
     AutoCommandBufferBuilder,
     CommandBufferUsage,
+    allocator::StandardCommandBufferAllocator,
   },
-  descriptor_set::{allocator::StandardDescriptorSetAllocator, DescriptorSet, WriteDescriptorSet},
+  descriptor_set::{DescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator},
   device::{Device, Queue},
   format::Format,
-  image::{sampler::Sampler, view::ImageView, ImageUsage},
+  image::{ImageUsage, sampler::Sampler, view::ImageView},
   instance::Instance,
   memory::allocator::StandardMemoryAllocator,
   pipeline::Pipeline,
   render_pass::Subpass,
-  swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
+  swapchain::{Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo, acquire_next_image},
   sync::{self, GpuFuture},
-  Validated,
-  VulkanError,
 };
 #[cfg(not(target_os = "linux"))]
 use winit::dpi::LogicalPosition;
@@ -58,13 +58,13 @@ use winit::{
 };
 
 use crate::{
+  Camera,
   core::{command_buffer_builder_ext::AutoCommandBufferBuilderExt, init::initialize_vulkan},
   render::{
     model::VikingRoomModelBuffers,
-    pipeline::{window_size_dependent_setup, RenderContext, WindowSizeSetupConfig},
+    pipeline::{RenderContext, WindowSizeSetupConfig, window_size_dependent_setup},
   },
   shaders::{fs, vs},
-  Camera,
 };
 
 /// Main application state containing all Vulkan and window resources.
@@ -347,7 +347,8 @@ impl App {
     self.camera.update_movement(movement, delta_time);
 
     // Process right stick input with same smoothing as left stick
-    let stick_length = (self.right_stick_x * self.right_stick_x + self.right_stick_y * self.right_stick_y).sqrt();
+    let stick_length =
+      (self.right_stick_x * self.right_stick_x + self.right_stick_y * self.right_stick_y).sqrt();
     let rotation_deadzone = 0.15;
 
     let (processed_x, processed_y) = if stick_length > rotation_deadzone {
@@ -359,7 +360,10 @@ impl App {
       let curve = normalized_length * normalized_length;
 
       // Scale the input
-      (self.right_stick_x * scale * curve, self.right_stick_y * scale * curve)
+      (
+        self.right_stick_x * scale * curve,
+        self.right_stick_y * scale * curve,
+      )
     } else {
       (0.0, 0.0)
     };
@@ -452,23 +456,19 @@ impl ApplicationHandler for App {
 
       println!("Selected format: {:?}", image_format);
 
-      Swapchain::new(
-        self.device.clone(),
-        surface.clone(),
-        SwapchainCreateInfo {
-          min_image_count: surface_capabilities.min_image_count.max(2),
-          image_format,
-          image_extent: window_size.into(),
-          image_usage: ImageUsage::COLOR_ATTACHMENT
-            | ImageUsage::TRANSFER_DST
-            | ImageUsage::TRANSFER_SRC,
-          composite_alpha: vulkano::swapchain::CompositeAlpha::Opaque,
-          pre_transform: surface_capabilities.current_transform,
-          clipped: true,
-          present_mode,
-          ..Default::default()
-        },
-      )
+      Swapchain::new(self.device.clone(), surface.clone(), SwapchainCreateInfo {
+        min_image_count: surface_capabilities.min_image_count.max(2),
+        image_format,
+        image_extent: window_size.into(),
+        image_usage: ImageUsage::COLOR_ATTACHMENT
+          | ImageUsage::TRANSFER_DST
+          | ImageUsage::TRANSFER_SRC,
+        composite_alpha: vulkano::swapchain::CompositeAlpha::Opaque,
+        pre_transform: surface_capabilities.current_transform,
+        clipped: true,
+        present_mode,
+        ..Default::default()
+      })
       .unwrap()
     };
 

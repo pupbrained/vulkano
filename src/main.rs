@@ -1,3 +1,6 @@
+#![warn(clippy::pedantic)]
+#![warn(clippy::nursery)]
+
 //! Vulkano Application Entry Point
 //!
 //! This is the main entry point for the Vulkano-based application.
