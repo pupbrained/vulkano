@@ -5,16 +5,16 @@ edition = "2024"
 
 [dependencies]
 glam = "0.29"
-egui-winit = { version = "0.30", default-features = false }
-egui_winit_vulkano = { git = "https://github.com/pupbrained/egui_winit_vulkano" }
-egui = "0.30"
+egui-winit = { version = "0.31", default-features = false }
+egui_winit_vulkano = { git = "https://github.com/Letronix624/egui_winit_vulkano" }
+egui = "0.31"
 image = "0.25"
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 gilrs = "0.11"
-vulkano = { version = "0.34", git = "https://github.com/vulkano-rs/vulkano.git" }
-vulkano-shaders = { version = "0.34", git = "https://github.com/vulkano-rs/vulkano.git" }
-vulkano-util = { version = "0.34", git = "https://github.com/vulkano-rs/vulkano.git" }
-egui_demo_lib = "0.30"
+vulkano = "0.35"
+vulkano-shaders = "0.35"
+vulkano-util = "0.35"
+egui_demo_lib = "0.31"
 raw-window-handle = "0.6"
 tobj = "4.0"
 
